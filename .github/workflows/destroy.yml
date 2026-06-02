@@ -1,0 +1,66 @@
+name: "OpenTofu Teardown (Compute Only)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_destroy:
+        description: 'Type "yes" to confirm you want to destroy the compute node.'
+        required: true
+        default: 'no'
+        type: string
+
+jobs:
+  destroy-compute:
+    name: "Destroy Compute Environment"
+    runs-on: ubuntu-latest
+    # Safety check: Pipeline immediately exits if the user didn't type 'yes'
+    if: ${{ github.event.inputs.confirm_destroy == 'yes' }}
+    
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      # 1. Fetch secrets from Infisical (Same as deploy)
+      - name: Fetch Pipeline Secrets from Infisical
+        uses: Infisical/secrets-action@v1.0.9
+        with:
+          client-id: ${{ secrets.INFISICAL_CLIENT_ID }}
+          client-secret: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+          env-slug: "prod"
+          project-slug: "pipeline-secret-store"
+          secret-path: "/bounty-infra"
+
+      - name: Setup OpenTofu Core
+        uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: 1.7.1
+
+      # 2. Authenticate to AWS via OIDC using dynamic Infisical variables
+      - name: Configure AWS Administrative Access via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_OIDC_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # 3. Dynamic Backend Injection (Required so it knows what to destroy)
+      - name: Initialize Codebase Modules
+        run: |
+          tofu init \
+            -backend-config="bucket=${{ env.FINDINGS_BUCKET_NAME }}" \
+            -backend-config="region=${{ env.AWS_REGION }}"
+        working-directory: ./compute
+
+      # 4. Execute Teardown using env vars
+      - name: Execute Teardown (Destroy)
+        run: |
+          tofu destroy -auto-approve \
+            -var="aws_region=${{ env.AWS_REGION }}" \
+            -var="operator_ip=${{ env.OPERATOR_IP }}" \
+            -var="public_key=${{ env.OPERATOR_SSH_KEY }}" \
+            -var="findings_bucket_name=${{ env.FINDINGS_BUCKET_NAME }}" \
+            -var="kms_key_arn=${{ env.KMS_KEY_ARN }}"
+        working-directory: ./compute
