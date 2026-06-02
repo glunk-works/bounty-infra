@@ -1,0 +1,73 @@
+name: "OpenTofu Infrastructure Deployment"
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'compute/**'
+  # Added workflow_dispatch so you can manually trigger deployments from the UI if needed
+  workflow_dispatch: 
+
+jobs:
+  opentofu:
+    name: "OpenTofu Execution Pipeline"
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # Required for AWS OIDC
+      contents: read
+
+    steps:
+      # v4 is the latest standard, resolving Node.js 16 deprecation warnings
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      # 1. Authenticate with Infisical and pull down all secrets
+      # Pinned to exact version because Infisical does not support floating v1 tags
+      - name: Fetch Pipeline Secrets from Infisical
+        uses: Infisical/secrets-action@v1.0.9
+        with:
+          client-id: ${{ secrets.INFISICAL_CLIENT_ID }}
+          client-secret: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+          env-slug: "prod"
+          project-slug: "pipeline-secret-store"
+          secret-path: "/bounty-infra"
+
+      # Uses v1 to pull the latest 1.x version of setup-opentofu
+      - name: Setup OpenTofu Core
+        uses: opentofu/setup-opentofu@v1
+        with:
+          # Bumping to a more recent stable 1.7.x release for modern features
+          tofu_version: 1.7.1
+
+      # 2. Authenticate to AWS dynamically using the Infisical-provided Role ARN
+      # v4 is the latest standard for AWS OIDC federation
+      - name: Configure AWS Administrative Access via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_OIDC_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # 3. Dynamic Backend Injection
+      - name: Initialize Codebase Modules
+        run: |
+          tofu init \
+            -backend-config="bucket=${{ env.FINDINGS_BUCKET_NAME }}" \
+            -backend-config="region=${{ env.AWS_REGION }}"
+        working-directory: ./compute
+
+      - name: Generate Structural Dry Run (Plan)
+        run: |
+          tofu plan \
+            -var="aws_region=${{ env.AWS_REGION }}" \
+            -var="operator_ip=${{ env.OPERATOR_IP }}" \
+            -var="public_key=${{ env.OPERATOR_SSH_KEY }}" \
+            -var="findings_bucket_name=${{ env.FINDINGS_BUCKET_NAME }}" \
+            -var="kms_key_arn=${{ env.KMS_KEY_ARN }}" \
+            -out=tfplan
+        working-directory: ./compute
+
+      - name: Execute Changes (Apply)
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: tofu apply -auto-approve tfplan
+        working-directory: ./compute
