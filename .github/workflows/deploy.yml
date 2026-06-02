@@ -20,11 +20,11 @@ jobs:
     steps:
       # v4 is the latest standard, resolving Node.js 16 deprecation warnings
       - name: Checkout Source Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       # 1. Authenticate with Infisical via OIDC (Zero-Secret)
       - name: Fetch Pipeline Secrets from Infisical
-        uses: Infisical/secrets-action@v1.0.12
+        uses: Infisical/secrets-action@v1.0.16
         with:
           method: "oidc"
           identity-id: ${{ env.IDENTITY_ID }} # Not a secret, can be hardcoded
@@ -32,17 +32,15 @@ jobs:
           project-slug: "pipeline-secret-store"
           secret-path: "/bounty-infra"
 
-      # Uses v1 to pull the latest 1.x version of setup-opentofu
+      # Uses v2 to pull the latest 2.x version of setup-opentofu
       - name: Setup OpenTofu Core
-        uses: opentofu/setup-opentofu@v1
-        with:
-          # Bumping to a more recent stable 1.7.x release for modern features
-          tofu_version: 1.7.1
+        uses: opentofu/setup-opentofu@v2
+
 
       # 2. Authenticate to AWS dynamically using the Infisical-provided Role ARN
       # v4 is the latest standard for AWS OIDC federation
       - name: Configure AWS Administrative Access via OIDC
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ env.AWS_OIDC_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
