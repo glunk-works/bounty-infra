@@ -27,7 +27,7 @@ jobs:
         uses: Infisical/secrets-action@v1.0.9
         with:
           method: "oidc"
-          identity-id: "53832dc1-4f36-422a-b3eb-78106d7233c1" # Not a secret, can be hardcoded
+          identity-id: ${{ env.IDENTITY_ID }} # Not a secret, can be hardcoded
           env-slug: "prod"
           project-slug: "pipeline-secret-store"
           secret-path: "/bounty-infra"
