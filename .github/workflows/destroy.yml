@@ -26,7 +26,7 @@ jobs:
 
       # 1. Authenticate with Infisical via OIDC (Zero-Secret)
       - name: Fetch Pipeline Secrets from Infisical
-        uses: Infisical/secrets-action@v1.0.9
+        uses: Infisical/secrets-action@v1.0.12
         with:
           method: "oidc"
           identity-id: ${{ env.IDENTITY_ID }} # Not a secret, can be hardcoded
