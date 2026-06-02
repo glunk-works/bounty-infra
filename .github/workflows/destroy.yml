@@ -24,12 +24,12 @@ jobs:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      # 1. Fetch secrets from Infisical (Same as deploy)
+      # 1. Authenticate with Infisical via OIDC (Zero-Secret)
       - name: Fetch Pipeline Secrets from Infisical
         uses: Infisical/secrets-action@v1.0.9
         with:
-          client-id: ${{ secrets.INFISICAL_CLIENT_ID }}
-          client-secret: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+          method: "oidc"
+          identity-id: "53832dc1-4f36-422a-b3eb-78106d7233c1" # Not a secret, can be hardcoded
           env-slug: "prod"
           project-slug: "pipeline-secret-store"
           secret-path: "/bounty-infra"
