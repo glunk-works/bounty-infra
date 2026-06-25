@@ -9,6 +9,14 @@ override.tf.json
 *_override.tf
 *_override.tf.json
 
+# OpenTofu / Terraform
+.terraform/
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+.terraform.lock.hcl
+
 # Python
 pycache/*.py
 
