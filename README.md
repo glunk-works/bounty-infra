@@ -1,97 +1,79 @@
-# 🎯 bounty-infra: Automated Vulnerability Assessment Architecture
+# **🎯 glunk-works/bounty-infra: Agentic Vulnerability Scanning**
 
-`bounty-infra` is an automated OpenTofu IaC pipeline deploying ephemeral, highly secure AWS bug bounty environments via GitHub Actions. It separates isolated, KMS-encrypted S3 storage for persistent findings from dynamically provisioned Ubuntu compute nodes, which automatically bootstrap with industry-standard tools like Nuclei, Amass, and ffuf.
+bounty-infra is a modern, serverless DevSecOps pipeline that deploys ephemeral, highly secure bug bounty and vulnerability scanning environments.
 
-## 🏗️ Architecture Overview
+This repository has recently been overhauled from a persistent EC2/Bash architecture to a **zero-trust, containerized AWS Fargate model** orchestrated by OpenTofu and GitHub Actions. It leverages an autonomous AI triage loop (via Google Gen AI) to contextualize raw scanner telemetry into actionable executive intelligence.
 
-The infrastructure is strictly divided into two lifecycles:
+## **🏗️ Architectural Evolution**
 
-1. **Persistent Bootstrap Stratum (`/bootstrap`):**
-   * **Storage:** KMS-encrypted S3 bucket for findings and DynamoDB for state locking.
-   * **Security:** Configures **OpenID Connect (OIDC)** federation, eliminating the need for static AWS Access Keys. GitHub Actions assumes a temporary, strictly scoped IAM role to deploy resources.
+**The Legacy Architecture (Deprecated):**
 
-2. **Ephemeral Compute Stratum (`/compute`):**
-   * **Network & Compute:** Deploys a VPC, strict Security Groups (whitelisted to your IP), and an Ubuntu 24.04 LTS instance.
-   * **Automation:** User-data scripts automatically install Go, Subfinder, Nuclei, httpx, ffuf, and Amass upon boot. 
-   * **Permissions:** Assigns an isolated IAM Instance Profile allowing the machine to write directly to your encrypted findings bucket.
+* Relied on persistent Ubuntu EC2 instances.  
+* High latency on boot (5+ minutes) to compile Go binaries via user\_data.sh.  
+* Required manual teardown workflows to prevent idle compute costs.  
+* State and findings buckets were tightly coupled to the compute lifecycle.
 
----
+**The New Serverless Architecture:**
 
-## 🚀 Deployment Playbook
+* **Ephemeral Compute:** Uses AWS Fargate. Costs scale to absolutely zero when scans are not running.  
+* **Immutable Execution:** Tools (subfinder, httpx, nuclei) are pre-compiled into a Docker image alongside Python. Boot time is reduced to seconds.  
+* **Agentic Triage:** A Python reasoning loop uses pydantic and Gemini 1.5 Flash to strip out false positives, generating a structured executive summary and top 3 critical threats.  
+* **Decoupled State:** Persistent storage (Tofu State, DynamoDB Locks, KMS, and the S3 Findings Bucket) has been abstracted to the global-bootstrap repository. This repository is now entirely stateless.
 
-### Prerequisites
-* [OpenTofu](https://opentofu.org/docs/intro/install/) installed locally (`winget install OpenTofu.OpenTofu` or `brew install opentofu`).
-* [AWS CLI](https://aws.amazon.com/cli/) configured locally with administrative access (`aws configure`).
-* A GitHub repository to host this code.
+## **📂 Repository Structure**
 
-### Stage 1: Persistent Initialization (Bootstrap)
-You must execute this phase locally **once** to establish the backend state tracking and the GitHub OIDC trust relationship.
+The codebase strictly separates infrastructure-as-code from the application logic:
 
-1. Clone your repository and navigate to the bootstrap directory:
-   ~~~bash
-   cd bootstrap
-   ~~~
-2. Initialize OpenTofu:
-   ~~~bash
-   tofu init
-   ~~~
-3. Apply the bootstrap configuration (Provide a globally unique bucket name):
-   ~~~bash
-   tofu apply -var="bucket_name=your-unique-bounty-archive-01"
-   ~~~
-4. **Save the Outputs:** When the apply completes, the terminal will output three critical values. Save these for Stage 2:
-   * `findings_bucket_arn`
-   * `kms_key_arn`
-   * `github_actions_deployer_role_arn`
+bounty-infra/  
+├── .github/workflows/  
+│   └── scanner-pipeline.yml   \# The unified CI/CD loop (Provision, Build, Scan)  
+├── infra/                     \# OpenTofu Infrastructure (Replaces /compute)  
+│   ├── backend.tf             \# Partial backend configuration (injected at runtime)  
+│   ├── main.tf                \# VPC, Fargate Cluster, ECR, and IAM Task Roles  
+│   ├── variables.tf
+│   └── outputs.tf
+└── src/                       \# Application Payload  
+    ├── Dockerfile             \# Multi-stage Go builder & Python runner  
+    └── scanner.py             \# The core Agentic reasoning loop and S3 uploader
 
-### Stage 2: Bind the Compute Environment
-Now that your storage exists, you must tell your compute environment where to save its state.
+## **🔒 Security & Zero-Trust Posture**
 
-1. Open `compute/main.tf`.
-2. Locate the `backend "s3"` block at the top of the file.
-3. Replace the `bucket` value with the exact name of the bucket you just created (e.g., `your-unique-bounty-archive-01`).
+1. **Zero-Ingress Networking:** The Fargate task operates in a public subnet to allow outbound scanning and ECR image pulls without the $32/mo overhead of an AWS NAT Gateway. However, the Security Group explicitly denies **all** inbound traffic.  
+2. **Secretless Authentication:** No long-lived AWS IAM Access Keys are stored in GitHub. We use **Infisical** via OIDC to inject dynamic credentials at runtime.  
+3. **Least Privilege IAM:** The execution environment uses two separate IAM roles:  
+   * *Execution Role:* Granted to AWS to pull images and write CloudWatch logs.  
+   * *Task Role:* Granted to the Python script inside the container, strictly scoped to write to the FINDINGS\_BUCKET\_NAME mapped from global-bootstrap.  
+4. **Non-Root Containers:** The Docker container executes all security tools under a restricted sec-ops user group.
 
-### Stage 3: GitHub Actions Configuration
-Navigate to your GitHub Repository -> **Settings** -> **Secrets and variables** -> **Actions**.
+## **🚀 Usage & Deployment**
 
-Create the following **Repository Secrets**:
-* `OPERATOR_IP`: Your public IP address in CIDR format (e.g., `203.0.113.5/32`) for SSH whitelisting.
-* `OPERATOR_SSH_KEY`: Your public SSH key (`ssh-rsa ...`) for instance access.
-* `FINDINGS_BUCKET_NAME`: The name of the S3 bucket created in Stage 1.
-* `KMS_KEY_ARN`: The KMS Key ARN output from Stage 1.
+Because this infrastructure is stateless, you do not need to run local initializations. Everything is handled via the GitHub Actions UI.
 
-*(Note: Because we use OIDC federation, you **do not** need to store AWS Access Keys in GitHub!)*
+### **Prerequisites (Infisical)**
 
-### Stage 4: Triggering the Pipeline
-To deploy the compute node, ensure your `.github/workflows/deploy.yml` is configured with the `github_actions_deployer_role_arn` (from Stage 1) in the AWS credentials step.
+Ensure the following variables are populated in your Infisical bounty-infra path:
 
-Commit your changes and push to the `main` branch:
-~~~bash
-git add .
-git commit -m "Initialize backend and trigger compute deployment"
-git push origin main
-~~~
-GitHub Actions will now assume the OIDC role, validate the code, and spin up your testing environment.
+* AWS\_OIDC\_ROLE\_ARN: The OIDC deployment role from global-bootstrap.  
+* AWS\_REGION: e.g., us-east-1  
+* TF\_STATE\_BUCKET: The central Terraform state bucket from global-bootstrap.  
+* TF\_STATE\_LOCK\_TABLE: The central DynamoDB lock table.  
+* FINDINGS\_BUCKET\_NAME: The S3 bucket where JSON reports will be saved.  
+* GEMINI\_API\_KEY: Required for the scanner.py LLM triage loop.
 
----
+### **Running a Scan**
 
-## 💻 Accessing Your Node
+1. Navigate to the **Actions** tab in this GitHub repository.  
+2. Select the **Deploy Infrastructure & Execute Scan** workflow.  
+3. Click **Run workflow**.  
+4. Enter your target\_domain (e.g., example.com) into the input prompt.  
+5. Click **Run**.
 
-Once the GitHub Action completes successfully, expand the **Execute Changes (Apply)** step in the Actions log to find your `instance_public_ip`.
+### **The Pipeline Lifecycle**
 
-Connect via SSH:
-~~~bash
-ssh ubuntu@<INSTANCE_PUBLIC_IP>
-~~~
+When triggered, the pipeline automatically:
 
-*Note: The background installation of security tools via `user_data` takes approximately 3-5 minutes after boot. You can track the progress by running `tail -f /var/log/user-data.log` on the machine.*
-
-## 🧹 Teardown
-
-When you are finished testing, you should destroy the compute node to save costs. You can do this by running a manual workflow dispatch in GitHub Actions (if configured) or locally:
-
-~~~bash
-cd compute
-tofu init
-tofu destroy -var="operator_ip=..." -var="public_key=..." -var="findings_bucket_name=..." -var="kms_key_arn=..."
-~~~
+1. Authenticates to Infisical and AWS via OIDC.  
+2. Runs tofu apply on the /infra directory (creating the VPC and ECS cluster if they don't exist, or cleanly verifying them in seconds).  
+3. Builds the Docker container from /src and pushes it to your ECR registry.  
+4. Triggers the Fargate task via the AWS CLI, injecting the target domain as a runtime override.  
+5. The container runs the reconnaissance pipeline, triages the findings with AI, uploads the results to S3, and terminates itself.

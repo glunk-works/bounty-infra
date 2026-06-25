@@ -113,6 +113,11 @@ resource "aws_iam_role" "github_actions_deployer" {
     ]
   })
 }
+
+resource "aws_iam_role_policy_attachment" "github_actions_admin" {
+  role       = aws_iam_role.github_actions_deployer.name
+  policy_arn = "arn:aws:iam::aws:policy/AdministratorAccess"
+}
 # Attach administrative or power-user permissions to the deployer role 
 # so it can build the compute networks, security groups, and EC2 instances.
 resource "aws_iam_role_policy_attachment" "deployer_poweruser" {

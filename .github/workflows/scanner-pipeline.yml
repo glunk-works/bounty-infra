@@ -1,0 +1,85 @@
+name: "Deploy Infrastructure & Execute Scan"
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_domain:
+        description: 'The target domain to scan (e.g., example.com)'
+        required: true
+        type: string
+
+jobs:
+  deploy-and-scan:
+    name: "Deploy to AWS & Run Scan"
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write 
+      contents: read
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v7
+
+      - name: Fetch Pipeline Secrets from Infisical
+        uses: Infisical/secrets-action@v1.0.16
+        with:
+          method: "oidc"
+          identity-id: ${{ vars.IDENTITY_ID }}
+          env-slug: "prod"
+          project-slug: "pipeline-secret-store"
+          secret-path: "/bounty-infra"
+
+      - name: Setup OpenTofu Core
+        uses: opentofu/setup-opentofu@v2
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ env.AWS_OIDC_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: OpenTofu Init & Apply
+        run: |
+          tofu init \
+            -backend-config="bucket=${{ env.TF_STATE_BUCKET }}" \
+            -backend-config="region=${{ env.AWS_REGION }}" \
+            -backend-config="dynamodb_table=${{ env.TF_STATE_LOCK_TABLE }}"
+          
+          tofu apply -auto-approve \
+            -var="aws_region=${{ env.AWS_REGION }}" \
+            -var="findings_bucket_name=${{ env.FINDINGS_BUCKET_NAME }}"
+        working-directory: ./infra
+
+      - name: Get Infrastructure Outputs
+        id: infra-outputs
+        run: |
+          echo "ECR_URL=$(tofu output -raw ecr_repository_url)" >> $GITHUB_ENV
+          echo "CLUSTER_NAME=$(tofu output -raw ecs_cluster_name)" >> $GITHUB_ENV
+          echo "SUBNET_ID=$(tofu output -raw subnet_id)" >> $GITHUB_ENV
+          echo "SG_ID=$(tofu output -raw security_group_id)" >> $GITHUB_ENV
+        working-directory: ./infra
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and Push Docker image
+        run: |
+          docker build -t ${{ env.ECR_URL }}:latest ./src
+          docker push ${{ env.ECR_URL }}:latest
+
+      - name: Run Vulnerability Scan
+        run: |
+          aws ecs run-task \
+            --cluster ${{ env.CLUSTER_NAME }} \
+            --task-definition bounty-scanner-task \
+            --launch-type FARGATE \
+            --network-configuration "awsvpcConfiguration={subnets=[${{ env.SUBNET_ID }}],securityGroups=[${{ env.SG_ID }}],assignPublicIp=ENABLED}" \
+            --overrides '{
+              "containerOverrides": [
+                {
+                  "name": "scanner-container",
+                  "command": ["python", "/opt/sec-ops/scanner.py", "${{ github.event.inputs.target_domain }}"]
+                }
+              ]
+            }'

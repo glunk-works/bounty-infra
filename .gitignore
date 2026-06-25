@@ -1,75 +1,24 @@
-# ==============================================================================
-# OpenTofu / Terraform
-# ==============================================================================
-
-# Ignore local execution directories
-**/.terraform/
-
-# Ignore local state files (Critical for the /bootstrap directory)
-*.tfstate
-*.tfstate.*
+# OpenTofu / Terraform.terraform/.tfstate
+.tfstate.
 crash.log
-crash.*.log
-
-# Ignore variable files that might contain local test values
+crash..log
 *.tfvars
 *.tfvars.json
-
-# Ignore plan output files (like the 'tfplan' we generate in CI/CD)
-*tfplan*
-
-# Ignore override files used for local development
-override.tf
+tfplanoverride.tf
 override.tf.json
 *_override.tf
 *_override.tf.json
 
-# NOTE: We DO NOT ignore .terraform.lock.hcl. 
-# OpenTofu uses this to lock provider versions, and it MUST be committed.
+# Python
+pycache/*.py
 
-# ==============================================================================
-# Visual Studio Code (VS Code)
-# ==============================================================================
-
-# Ignore the entire local VS Code directory
-.vscode/*
-
-# (Optional) Un-ignore specific VS Code files if you want to share workspace settings
-!.vscode/settings.json
-!.vscode/extensions.json
-
-# Ignore local workspace and history files
-*.code-workspace
-.history/
-
-# ==============================================================================
-# Secrets & Credentials
-# ==============================================================================
-
-# Catch-all for environment files (in case you test Infisical locally)
+[cod]
+*$py.class
+.venv/
+/venv
+/ENV/
 .env
-.env.*
-!.env.example
 
-# Ignore accidental SSH key or certificate commits
-*.pem
-*.key
-*.cer
-*.crt
-
-# ==============================================================================
-# OS Generated Files
-# ==============================================================================
-
-# macOS
-.DS_Store
-.AppleDouble
-.LSOverride
-._*
-
-# Windows
-Thumbs.db
-Thumbs.db:encryptable
-ehthumbs.db
-ehthumbs_vista.db
-*.cab
+# VS Code / OS
+.vscode/
+.DS_StoreThumbs.db

@@ -1,0 +1,38 @@
+name: "Test OIDC Authentication"
+
+on:
+  workflow_dispatch: # Allows you to trigger this manually
+
+permissions:
+  id-token: write # CRITICAL: Required for OIDC to function
+  contents: read
+
+jobs:
+  test-aws-auth:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v7
+
+      # 1. Test GitHub -> Infisical OIDC
+      - name: Fetch Pipeline Secrets from Infisical
+        uses: Infisical/secrets-action@v1.0.16
+        with:
+          method: "oidc"
+          identity-id: ${{ vars.IDENTITY_ID }}
+          env-slug: "prod"
+          project-slug: "pipeline-secret-store"
+          secret-path: "/bounty-infra"
+
+      # 2. Test GitHub/Infisical -> AWS OIDC
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ env.AWS_OIDC_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # 3. Verify the AWS Identity
+      - name: Verify AWS Connection
+        run: |
+          echo "Successfully authenticated!"
+          aws sts get-caller-identity
