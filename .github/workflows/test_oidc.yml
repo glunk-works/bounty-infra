@@ -25,6 +25,24 @@ jobs:
           project-slug: "pipeline-secret-store"
           secret-path: "/bounty-infra"
 
+      - name: Verify Infisical Secrets Injection
+        run: |
+          echo "Verifying AWS_REGION..."
+          if [ -z "${{ env.AWS_REGION }}" ]; then
+            echo "❌ AWS_REGION is empty! Infisical did not inject it."
+          else
+            echo "✅ AWS_REGION is set to: ${{ env.AWS_REGION }}"
+          fi
+
+          echo "Verifying AWS_OIDC_ROLE_ARN..."
+          if [ -z "${{ env.AWS_OIDC_ROLE_ARN }}" ]; then
+            echo "❌ AWS_OIDC_ROLE_ARN is empty! Infisical did not inject it."
+          else
+            echo "✅ AWS_OIDC_ROLE_ARN is populated."
+            # We print just the first 15 characters to verify it looks like an ARN without exposing the whole string
+            echo "Value starts with: ${AWS_OIDC_ROLE_ARN:0:15}..."
+          fi
+
       # 2. Test GitHub/Infisical -> AWS OIDC
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v6
