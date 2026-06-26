@@ -20,7 +20,6 @@ jobs:
         with:
           method: "oidc"
           identity-id: ${{ vars.IDENTITY_ID }}
-          oidc-audience: 'https://github.com/glunk-works/bounty-infra'
           env-slug: "prod"
           project-slug: "pipeline-secret-store"
           secret-path: "/bounty-infra"
