@@ -10,6 +10,9 @@ jobs:
   validate:
     name: "Lint & Test"
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -24,6 +27,9 @@ jobs:
     name: "Hatch Build & Validate"
     needs: validate
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
