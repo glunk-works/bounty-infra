@@ -107,12 +107,23 @@ resource "aws_iam_policy" "s3_write_policy" {
     Version = "2012-10-17"
     Statement = [
       {
+        Sid    = "AllowS3Access"
         Effect = "Allow"
         Action = ["s3:PutObject", "s3:GetObject", "s3:ListBucket"]
         Resource = [
           "arn:aws:s3:::${var.findings_bucket_name}",
           "arn:aws:s3:::${var.findings_bucket_name}/*"
         ]
+      },
+      {
+        Sid    = "AllowKMSEncryption"
+        Effect = "Allow"
+        Action = [
+          "kms:Encrypt",
+          "kms:Decrypt",
+          "kms:GenerateDataKey*"
+        ]
+        Resource = [var.kms_key_arn]
       }
     ]
   })

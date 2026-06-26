@@ -48,7 +48,8 @@ jobs:
           
           tofu apply -auto-approve \
             -var="aws_region=${{ env.AWS_REGION }}" \
-            -var="findings_bucket_name=${{ env.FINDINGS_BUCKET_NAME }}"
+            -var="findings_bucket_name=${{ env.FINDINGS_BUCKET_NAME }}" \
+            -var="kms_key_arn=${{ env.KMS_KEY_ARN }}"
         working-directory: ./infra
 
       - name: Get Infrastructure Outputs
