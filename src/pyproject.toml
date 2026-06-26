@@ -44,4 +44,4 @@ dependencies = [
 run = "pytest tests/"
 
 [tool.hatch.build.targets.wheel]
-packages = ["bounty_scanner"]
+packages = ["src/bounty_scanner"]
