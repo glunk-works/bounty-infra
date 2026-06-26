@@ -34,8 +34,9 @@ COPY --from=builder /go/bin/subfinder /opt/sec-ops/bin/subfinder
 COPY --from=builder /go/bin/httpx /opt/sec-ops/bin/httpx
 COPY --from=builder /go/bin/nuclei /opt/sec-ops/bin/nuclei
 
-# Added boto3 for S3 interaction
-RUN pip install --no-cache-dir google-genai pydantic boto3
+# Copy configuration and script, then install dependencies via pyproject.toml
+COPY pyproject.toml scanner.py /opt/sec-ops/
+RUN pip install --no-cache-dir .
 
 RUN /opt/sec-ops/bin/nuclei -update-templates -ud ${NUCLEI_TEMPLATES_DIR}
 

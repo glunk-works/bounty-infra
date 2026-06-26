@@ -1,0 +1,105 @@
+name: "2. Execute Vulnerability Scan"
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_domain:
+        description: 'The target domain to scan (e.g., example.com)'
+        required: true
+        type: string
+      image_tag:
+        description: 'Image tag to run (defaults to latest)'
+        required: false
+        default: 'latest'
+        type: string
+
+jobs:
+  execute-scan:
+    name: "Run Fargate Scan"
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write 
+      contents: read
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Fetch Pipeline Secrets from Infisical
+        uses: Infisical/secrets-action@v1.0.16
+        with:
+          method: "oidc"
+          identity-id: ${{ vars.IDENTITY_ID }}
+          oidc-audience: ${{ github.server_url }}/${{ github.repository }}
+          env-slug: "prod"
+          project-slug: "pipeline-secret-store"
+          secret-path: "/bounty-infra"
+
+      - name: Setup OpenTofu Core
+        uses: opentofu/setup-opentofu@v1
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_OIDC_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # We only do init + output here to fetch network info dynamically. NO apply!
+      # This prevents DynamoDB lock contention if 5 scans run simultaneously.
+      - name: Fetch Infrastructure Networking States
+        id: infra-outputs
+        run: |
+          tofu init \
+            -backend-config="bucket=${{ env.TF_STATE_BUCKET }}" \
+            -backend-config="region=${{ env.AWS_REGION }}" \
+            -backend-config="dynamodb_table=${{ env.TF_STATE_LOCK_TABLE }}"
+          
+          echo "CLUSTER_NAME=$(tofu output -raw ecs_cluster_name)" >> $GITHUB_ENV
+          echo "SUBNET_ID=$(tofu output -raw subnet_id)" >> $GITHUB_ENV
+          echo "SG_ID=$(tofu output -raw security_group_id)" >> $GITHUB_ENV
+        working-directory: ./infra
+
+      - name: Trigger Scan Task & Wait for Completion
+        run: |
+          echo "Triggering scan for ${{ github.event.inputs.target_domain }}..."
+          
+          # Run the task and extract the Task ARN using jq
+          TASK_ARN=$(aws ecs run-task \
+            --cluster ${{ env.CLUSTER_NAME }} \
+            --task-definition bounty-scanner-task \
+            --launch-type FARGATE \
+            --network-configuration "awsvpcConfiguration={subnets=[${{ env.SUBNET_ID }}],securityGroups=[${{ env.SG_ID }}],assignPublicIp=ENABLED}" \
+            --overrides '{
+              "containerOverrides": [
+                {
+                  "name": "scanner-container",
+                  "command": ["python", "/opt/sec-ops/scanner.py", "${{ github.event.inputs.target_domain }}"]
+                }
+              ]
+            }' \
+            --query 'tasks[0].taskArn' \
+            --output text)
+
+          echo "Task launched: $TASK_ARN"
+          echo "Waiting for task to complete (this may take a few minutes)..."
+
+          # Wait for the task to stop running
+          aws ecs wait tasks-stopped \
+            --cluster ${{ env.CLUSTER_NAME }} \
+            --tasks $TASK_ARN
+
+          # Fetch the exit code to determine if the scan was successful
+          EXIT_CODE=$(aws ecs describe-tasks \
+            --cluster ${{ env.CLUSTER_NAME }} \
+            --tasks $TASK_ARN \
+            --query 'tasks[0].containers[0].exitCode' \
+            --output text)
+
+          echo "Task exited with code: $EXIT_CODE"
+          
+          if [ "$EXIT_CODE" != "0" ]; then
+            echo "❌ Scanner task failed! Check CloudWatch Logs for details."
+            exit 1
+          else
+            echo "✅ Scanner task completed successfully!"
+          fi

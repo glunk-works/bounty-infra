@@ -1,0 +1,51 @@
+version: 2
+updates:
+  # 1. Maintain GitHub Actions dependencies
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+      - "github-actions"
+    # Best Practice: Group action updates together to reduce PR fatigue
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+
+  # 2. Maintain Docker base images (src/Dockerfile)
+  - package-ecosystem: "docker"
+    directory: "/src"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+      - "docker"
+
+  # 3. Maintain Python dependencies (src/requirements.txt)
+  - package-ecosystem: "pip"
+    directory: "/src"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+      - "python"
+
+  # 4. Maintain Terraform/OpenTofu dependencies (infra/)
+  - package-ecosystem: "terraform"
+    directory: "/infra"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+      - "terraform"
+    
+  # 5. Maintain Terraform/OpenTofu dependencies (bootstrap/)
+  - package-ecosystem: "terraform"
+    directory: "/bootstrap"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+      - "terraform"

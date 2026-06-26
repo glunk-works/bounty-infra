@@ -1,0 +1,72 @@
+name: "1b. Build & Push Image"
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'src/**'
+      - '.github/workflows/build-image.yml'
+  workflow_dispatch:
+
+permissions:
+  id-token: write 
+  contents: read
+
+jobs:
+  build-and-push:
+    name: "Build and Push Container"
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Fetch Pipeline Secrets from Infisical
+        uses: Infisical/secrets-action@v1.0.16
+        with:
+          method: "oidc"
+          identity-id: ${{ vars.IDENTITY_ID }}
+          oidc-audience: ${{ github.server_url }}/${{ github.repository }}
+          env-slug: "prod"
+          project-slug: "pipeline-secret-store"
+          secret-path: "/bounty-infra"
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_OIDC_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup OpenTofu Core
+        uses: opentofu/setup-opentofu@v1
+
+      # We safely fetch the ECR URL from the existing state without running apply
+      - name: Fetch ECR URL from State
+        id: infra-outputs
+        run: |
+          tofu init \
+            -backend-config="bucket=${{ env.TF_STATE_BUCKET }}" \
+            -backend-config="region=${{ env.AWS_REGION }}" \
+            -backend-config="dynamodb_table=${{ env.TF_STATE_LOCK_TABLE }}"
+          
+          echo "ECR_URL=$(tofu output -raw ecr_repository_url)" >> $GITHUB_ENV
+        working-directory: ./infra
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and Push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./src
+          push: true
+          tags: |
+            ${{ env.ECR_URL }}:latest
+            ${{ env.ECR_URL }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
