@@ -40,12 +40,3 @@ updates:
     labels:
       - "dependencies"
       - "terraform"
-    
-  # 5. Maintain Terraform/OpenTofu dependencies (bootstrap/)
-  - package-ecosystem: "terraform"
-    directory: "/bootstrap"
-    schedule:
-      interval: "weekly"
-    labels:
-      - "dependencies"
-      - "terraform"
