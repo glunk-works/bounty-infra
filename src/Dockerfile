@@ -39,11 +39,7 @@ COPY dist/*.whl .
 RUN pip install --no-cache-dir *.whl
 
 RUN /opt/sec-ops/bin/nuclei -update-templates -ud ${NUCLEI_TEMPLATES_DIR}
-
-COPY scanner.py /opt/sec-ops/scanner.py
-
 RUN chown -R sec-ops:sec-ops /opt/sec-ops
-
 USER sec-ops
 
-ENTRYPOINT ["python", "/opt/sec-ops/scanner.py"]
+ENTRYPOINT ["python", "-m", "bounty_scanner.scanner"]
