@@ -77,3 +77,46 @@ When triggered, the pipeline automatically:
 3. Builds the Docker container from /src and pushes it to your ECR registry.  
 4. Triggers the Fargate task via the AWS CLI, injecting the target domain as a runtime override.  
 5. The container runs the reconnaissance pipeline, triages the findings with AI, uploads the results to S3, and terminates itself.
+
+## **Development Workflow**
+
+This project uses [Hatch](https://hatch.pypa.io/) for dependency management, linting, testing, and packaging. This ensures consistency between local development and our CI/CD pipeline.
+
+### **Prerequisites**
+
+* Python 3.11+  
+* [Hatch](https://hatch.pypa.io/latest/install/)
+
+### **Local Development Commands**
+
+Navigate to the src/ directory to run these commands:
+
+#### **1\. Quality Gates (Linting & Formatting)**
+
+We use ruff for linting/formatting and bandit for security analysis.
+
+cd src  
+hatch run lint:check  \# Check linting, formatting, and security  
+hatch run lint:fmt    \# Automatically fix formatting and linting issues
+
+#### **2\. Running Tests**
+
+We use pytest for unit testing.
+
+cd src  
+hatch run test:run    \# Run the full test suite
+
+#### **3\. Packaging**
+
+To build a distribution wheel for the application:
+
+cd src  
+hatch build           \# Generates a .whl file in the dist/ directory
+
+## **CI/CD Pipeline**
+
+Our pipeline is decoupled to ensure speed and reliability:
+
+* **Lint & Test:** Validated in the CI environment using hatch.  
+* **Packaging:** Built as a deterministic artifact using hatch build.  
+* **Deployment:** Containerized via Docker using the packaged wheel.

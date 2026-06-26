@@ -34,9 +34,9 @@ COPY --from=builder /go/bin/subfinder /opt/sec-ops/bin/subfinder
 COPY --from=builder /go/bin/httpx /opt/sec-ops/bin/httpx
 COPY --from=builder /go/bin/nuclei /opt/sec-ops/bin/nuclei
 
-# Copy configuration and script, then install dependencies via pyproject.toml
-COPY pyproject.toml scanner.py /opt/sec-ops/
-RUN pip install --no-cache-dir .
+# Copy the wheel file created by 'hatch build' in the CI pipeline
+COPY dist/*.whl .
+RUN pip install --no-cache-dir *.whl
 
 RUN /opt/sec-ops/bin/nuclei -update-templates -ud ${NUCLEI_TEMPLATES_DIR}
 
