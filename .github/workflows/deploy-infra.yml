@@ -20,7 +20,7 @@ jobs:
     
     steps:
       - name: Checkout Source Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Fetch Pipeline Secrets from Infisical
         uses: Infisical/secrets-action@v1.0.16
@@ -33,13 +33,13 @@ jobs:
           secret-path: "/bounty-infra"
 
       - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ env.AWS_OIDC_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Setup OpenTofu Core
-        uses: opentofu/setup-opentofu@v1
+        uses: opentofu/setup-opentofu@v2
 
       - name: OpenTofu Init & Apply
         run: |

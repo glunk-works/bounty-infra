@@ -14,8 +14,8 @@ jobs:
       run:
         working-directory: ./src
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
         with: {python-version: "3.11"}
         
       - run: pip install hatch
@@ -35,8 +35,8 @@ jobs:
       run:
         working-directory: ./src
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
         with: {python-version: "3.11"}
       - run: pip install hatch
       - name: Hatch Build Wheel
