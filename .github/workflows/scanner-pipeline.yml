@@ -25,6 +25,7 @@ jobs:
         with:
           method: "oidc"
           identity-id: ${{ vars.IDENTITY_ID }}
+          oidc-audience: ${{ github.server_url }}/${{ github.repository }}
           env-slug: "prod"
           project-slug: "pipeline-secret-store"
           secret-path: "/bounty-infra"
