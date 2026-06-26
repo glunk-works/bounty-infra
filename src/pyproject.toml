@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.21.0"]
 build-backend = "hatchling.build"
 
 [project]
@@ -24,14 +24,14 @@ dependencies = [
     "bandit",
 ]
 [tool.hatch.envs.lint.scripts]
-check = [
-    "ruff check .",
-    "ruff format --check .",
-    "bandit -r src/"
+heck = [
+    "ruff check bounty_scanner/",
+    "ruff format --check bounty_scanner/",
+    "bandit -r bounty_scanner/"
 ]
 fmt = [
-    "ruff format .",
-    "ruff check --fix .",
+    "ruff format bounty_scanner/",
+    "ruff check --fix bounty_scanner/"
 ]
 
 [tool.hatch.envs.test]
@@ -42,3 +42,6 @@ dependencies = [
 ]
 [tool.hatch.envs.test.scripts]
 run = "pytest tests/"
+
+[tool.hatch.build.targets.wheel]
+packages = ["bounty_scanner"]

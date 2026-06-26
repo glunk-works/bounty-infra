@@ -73,7 +73,7 @@ jobs:
               "containerOverrides": [
                 {
                   "name": "scanner-container",
-                  "command": ["python", "/opt/sec-ops/scanner.py", "${{ github.event.inputs.target_domain }}"]
+                  "command": ["python", "-m", "bounty_scanner.scanner", "${{ github.event.inputs.target_domain }}"]
                 }
               ]
             }' \
