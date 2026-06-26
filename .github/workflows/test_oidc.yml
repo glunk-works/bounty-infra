@@ -19,7 +19,7 @@ jobs:
         uses: Infisical/secrets-action@v1.0.16
         with:
           method: "oidc"
-          oidc-audience: ${{ github.server_url }}/{{ github.repository }}
+          oidc-audience: ${{ github.server_url }}/${{ github.repository }}
           identity-id: ${{ vars.IDENTITY_ID }}
           env-slug: "prod"
           project-slug: "pipeline-secret-store"
