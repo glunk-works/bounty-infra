@@ -28,7 +28,7 @@ dependencies = [
 check = [
     "ruff check bounty_scanner/",
     "ruff format --check bounty_scanner/",
-    "bandit -r bounty_scanner/"
+    "bandit -ll -r bounty_scanner/"
 ]
 fmt = [
     "ruff format bounty_scanner/",
