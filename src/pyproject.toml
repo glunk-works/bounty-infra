@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "bounty-scanner"
 version = "0.1.0"
 description = "Agentic Vulnerability Scanning Pipeline"
-requires-python = ">=3.14"
+requires-python = ">=3.11"
 dependencies = [
     "google-genai>=0.1.0",
     "pydantic>=2.0.0",
