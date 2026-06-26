@@ -18,13 +18,14 @@ dependencies = [
 dependencies = []
 
 [tool.hatch.envs.lint]
+skip-install = true
 # Environment for Ruff and Bandit
 dependencies = [
     "ruff",
     "bandit",
 ]
 [tool.hatch.envs.lint.scripts]
-heck = [
+check = [
     "ruff check bounty_scanner/",
     "ruff format --check bounty_scanner/",
     "bandit -r bounty_scanner/"
@@ -44,4 +45,4 @@ dependencies = [
 run = "pytest tests/"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/bounty_scanner"]
+packages = ["bounty_scanner"]
