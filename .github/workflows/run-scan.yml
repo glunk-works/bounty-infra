@@ -7,10 +7,20 @@ on:
         description: 'The target domain to scan (e.g., example.com)'
         required: true
         type: string
-      image_tag:
-        description: 'Image tag to run (defaults to latest)'
+      severities:
+        description: 'Severities to scan for (comma-separated)'
         required: false
-        default: 'latest'
+        default: 'medium,high,critical'
+        type: string
+      timeout:
+        description: 'Subprocess timeout in seconds'
+        required: false
+        default: '1800'
+        type: string
+      max_findings:
+        description: 'Max findings for AI triage'
+        required: false
+        default: '50'
         type: string
 
 jobs:
@@ -20,10 +30,11 @@ jobs:
     permissions:
       id-token: write 
       contents: read
+      issues: write # REQUIRED: Allows the GITHUB_TOKEN to create issues
 
     steps:
       - name: Checkout Source Code
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
 
       - name: Fetch Pipeline Secrets from Infisical
         uses: Infisical/secrets-action@v1.0.16
@@ -36,16 +47,14 @@ jobs:
           secret-path: "/bounty-infra"
 
       - name: Setup OpenTofu Core
-        uses: opentofu/setup-opentofu@v2
+        uses: opentofu/setup-opentofu@v1
 
       - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v6
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ env.AWS_OIDC_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # We only do init + output here to fetch network info dynamically. NO apply!
-      # This prevents DynamoDB lock contention if 5 scans run simultaneously.
       - name: Fetch Infrastructure Networking States
         id: infra-outputs
         run: |
@@ -63,7 +72,7 @@ jobs:
         run: |
           echo "Triggering scan for ${{ github.event.inputs.target_domain }}..."
           
-          # Run the task and extract the Task ARN using jq
+          # Run the task and inject the workflow inputs as module arguments
           TASK_ARN=$(aws ecs run-task \
             --cluster ${{ env.CLUSTER_NAME }} \
             --task-definition bounty-scanner-task \
@@ -73,7 +82,17 @@ jobs:
               "containerOverrides": [
                 {
                   "name": "scanner-container",
-                  "command": ["python", "-m", "bounty_scanner.scanner", "${{ github.event.inputs.target_domain }}"]
+                  "command": [
+                    "python", "-m", "bounty_scanner.scanner", 
+                    "${{ github.event.inputs.target_domain }}",
+                    "--severities", "${{ github.event.inputs.severities }}",
+                    "--timeout", "${{ github.event.inputs.timeout }}",
+                    "--max-findings", "${{ github.event.inputs.max_findings }}"
+                  ],
+                  "environment": [
+                    { "name": "GITHUB_TOKEN", "value": "${{ secrets.GITHUB_TOKEN }}" },
+                    { "name": "GITHUB_REPOSITORY", "value": "${{ github.repository }}" }
+                  ]
                 }
               ]
             }' \
@@ -83,12 +102,10 @@ jobs:
           echo "Task launched: $TASK_ARN"
           echo "Waiting for task to complete (this may take a few minutes)..."
 
-          # Wait for the task to stop running
           aws ecs wait tasks-stopped \
             --cluster ${{ env.CLUSTER_NAME }} \
             --tasks $TASK_ARN
 
-          # Fetch the exit code to determine if the scan was successful
           EXIT_CODE=$(aws ecs describe-tasks \
             --cluster ${{ env.CLUSTER_NAME }} \
             --tasks $TASK_ARN \
@@ -98,8 +115,8 @@ jobs:
           echo "Task exited with code: $EXIT_CODE"
           
           if [ "$EXIT_CODE" != "0" ]; then
-            echo "❌ Scanner task failed! Check CloudWatch Logs for details."
+            echo "❌ Scanner infrastructure task failed to execute! Check CloudWatch Logs for crash details."
             exit 1
           else
-            echo "✅ Scanner task completed successfully!"
+            echo "✅ Scanner task executed successfully! (Security findings, if any, have been exported to S3)."
           fi
