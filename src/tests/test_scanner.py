@@ -82,13 +82,24 @@ def test_run_recon_pipeline_no_subdomains(mocker):
     mock_run = mocker.patch("subprocess.run")
     mocker.patch("os.path.getsize", return_value=0)
 
-    with run_recon_pipeline("example.com") as artifacts:
+    # Test passing a custom timeout overrides the default
+    with run_recon_pipeline("example.com", timeout=300) as artifacts:
         assert artifacts.findings == []
         assert mock_run.call_count == 1  # Only subfinder runs
+        
+        # Validate that the timeout param was successfully passed down to subprocess
+        mock_run.assert_called_with(["subfinder", "-d", "example.com", "-silent"], stdout=mocker.ANY, check=True, timeout=300)
 
 def test_run_recon_pipeline_subprocess_error(mocker):
     """Test gracefully yielding current state on binary crash."""
     mocker.patch("subprocess.run", side_effect=subprocess.CalledProcessError(1, "cmd"))
+    
+    with run_recon_pipeline("example.com") as artifacts:
+        assert artifacts.findings == []
+
+def test_run_recon_pipeline_subprocess_timeout(mocker):
+    """Test gracefully yielding current state when a binary times out."""
+    mocker.patch("subprocess.run", side_effect=subprocess.TimeoutExpired("cmd", 1800))
     
     with run_recon_pipeline("example.com") as artifacts:
         assert artifacts.findings == []

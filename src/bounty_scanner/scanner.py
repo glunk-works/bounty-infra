@@ -53,7 +53,7 @@ class TriageReport(BaseModel):
 
 
 @contextmanager
-def run_recon_pipeline(domain: str):
+def run_recon_pipeline(domain: str, timeout: int = 1800):
     """Runs recon pipeline using disk-backed I/O. Yields paths safely as a context manager."""
     findings = []
 
@@ -78,7 +78,10 @@ def run_recon_pipeline(domain: str):
         logger.info(f"Running subfinder on {domain}...")
         with open(artifacts.subs_file, "w") as f_out:
             subprocess.run(
-                ["subfinder", "-d", domain, "-silent"], stdout=f_out, check=True
+                ["subfinder", "-d", domain, "-silent"],
+                stdout=f_out,
+                check=True,
+                timeout=timeout,
             )
 
         # Check if subfinder found anything before continuing
@@ -89,7 +92,11 @@ def run_recon_pipeline(domain: str):
                 open(artifacts.live_file, "w") as f_out,
             ):
                 subprocess.run(
-                    ["httpx", "-silent"], stdin=f_in, stdout=f_out, check=True
+                    ["httpx", "-silent"],
+                    stdin=f_in,
+                    stdout=f_out,
+                    check=True,
+                    timeout=timeout,
                 )
 
             if os.path.getsize(artifacts.live_file) > 0:
@@ -103,6 +110,7 @@ def run_recon_pipeline(domain: str):
                         stdin=f_in,
                         stdout=f_out,
                         check=True,
+                        timeout=timeout,
                     )
 
                 # Read the nuclei output line-by-line (highly memory efficient)
@@ -118,6 +126,9 @@ def run_recon_pipeline(domain: str):
 
         yield artifacts
 
+    except subprocess.TimeoutExpired as e:
+        logger.error(f"Pipeline tool timed out after {e.timeout} seconds: {e.cmd}")
+        yield artifacts  # Yield whatever was collected before the timeout
     except subprocess.CalledProcessError as e:
         logger.error(f"Pipeline tool failed during execution: {e}")
         yield artifacts  # Yield whatever was collected before the crash
