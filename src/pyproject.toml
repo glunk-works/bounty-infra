@@ -42,7 +42,7 @@ dependencies = [
     "pytest-mock",
 ]
 [tool.hatch.envs.test.scripts]
-run = "pytest tests/"
+run = "pytest ./tests/"
 
 [tool.hatch.build.targets.wheel]
 packages = ["bounty_scanner"]
