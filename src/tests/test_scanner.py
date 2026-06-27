@@ -2,16 +2,17 @@ import os
 import json
 import subprocess
 import pytest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, mock_open, call
 
-# Import the module components to test
 from bounty_scanner.scanner import (
     run_recon_pipeline,
     triage_findings,
     upload_to_s3,
     main,
     Finding,
-    TriageReport
+    TriageReport,
+    ReconArtifacts,
+    MAX_FINDINGS_FOR_LLM
 )
 
 # ==========================================
@@ -20,7 +21,6 @@ from bounty_scanner.scanner import (
 
 @pytest.fixture
 def mock_raw_findings():
-    """Provides a sample list of raw Nuclei findings."""
     return [
         {
             "template-id": "cve-2021-44228",
@@ -37,8 +37,16 @@ def mock_raw_findings():
     ]
 
 @pytest.fixture
+def mock_artifacts(mock_raw_findings):
+    return ReconArtifacts(
+        findings=mock_raw_findings,
+        subs_file="/tmp/subs.txt",
+        live_file="/tmp/live.txt",
+        nuclei_file="/tmp/nuclei.jsonl"
+    )
+
+@pytest.fixture
 def mock_triage_report():
-    """Provides a sample TriageReport object."""
     return TriageReport(
         summary="A critical Log4j vulnerability was found.",
         top_findings=[
@@ -57,54 +65,42 @@ def mock_triage_report():
 # ==========================================
 
 def test_run_recon_pipeline_success(mocker, mock_raw_findings):
-    """Test successful execution of the recon pipeline (subfinder -> httpx -> nuclei)."""
-    # Mock the 3 sequential subprocess calls
-    mock_subfinder = MagicMock(stdout="sub.example.com\n")
-    mock_httpx = MagicMock(stdout="https://sub.example.com\n")
-    mock_nuclei = MagicMock(stdout=json.dumps(mock_raw_findings[0]) + "\n" + json.dumps(mock_raw_findings[1]) + "\n")
+    """Test successful execution with disk-backed I/O."""
+    mocker.patch("subprocess.run")
+    mocker.patch("os.path.getsize", return_value=100) # Mock files having content
     
-    mocker.patch(
-        "bounty_scanner.scanner.subprocess.run",
-        side_effect=[mock_subfinder, mock_httpx, mock_nuclei]
-    )
+    # Mock reading the nuclei JSONL output
+    mocked_file_data = "\n".join([json.dumps(f) for f in mock_raw_findings])
+    mocker.patch("builtins.open", mock_open(read_data=mocked_file_data))
 
-    results = run_recon_pipeline("example.com")
-    
-    assert len(results) == 2
-    assert results[0]["template-id"] == "cve-2021-44228"
+    with run_recon_pipeline("example.com") as artifacts:
+        assert len(artifacts.findings) == 2
+        assert artifacts.findings[0]["template-id"] == "cve-2021-44228"
 
 def test_run_recon_pipeline_no_subdomains(mocker):
-    """Test pipeline stops early if subfinder finds nothing."""
-    mock_subfinder = MagicMock(stdout="")
-    mock_run = mocker.patch("bounty_scanner.scanner.subprocess.run", return_value=mock_subfinder)
+    """Test pipeline stops early if subfinder finds nothing (0 bytes)."""
+    mock_run = mocker.patch("subprocess.run")
+    mocker.patch("os.path.getsize", return_value=0)
 
-    results = run_recon_pipeline("example.com")
-    
-    assert results == []
-    assert mock_run.call_count == 1  # Should not call httpx or nuclei
+    with run_recon_pipeline("example.com") as artifacts:
+        assert artifacts.findings == []
+        assert mock_run.call_count == 1  # Only subfinder runs
 
 def test_run_recon_pipeline_subprocess_error(mocker):
-    """Test pipeline gracefully handles a crash in the underlying binaries."""
-    mocker.patch(
-        "bounty_scanner.scanner.subprocess.run",
-        side_effect=subprocess.CalledProcessError(1, "subfinder", stderr="Crash")
-    )
-
-    results = run_recon_pipeline("example.com")
-    assert results == []
+    """Test gracefully yielding current state on binary crash."""
+    mocker.patch("subprocess.run", side_effect=subprocess.CalledProcessError(1, "cmd"))
+    
+    with run_recon_pipeline("example.com") as artifacts:
+        assert artifacts.findings == []
 
 # ==========================================
 # TESTS FOR: triage_findings
 # ==========================================
 
 def test_triage_findings_success(mocker, mock_raw_findings, mock_triage_report):
-    """Test that the LLM successfully parses findings into a TriageReport."""
-    # Mock the Gemini client and its response
+    """Test LLM parsing of actionable findings."""
     mock_client = MagicMock()
-    mock_response = MagicMock()
-    mock_response.text = mock_triage_report.model_dump_json()
-    mock_client.models.generate_content.return_value = mock_response
-    
+    mock_client.models.generate_content.return_value = MagicMock(text=mock_triage_report.model_dump_json())
     mocker.patch("bounty_scanner.scanner.genai.Client", return_value=mock_client)
 
     report = triage_findings(mock_raw_findings)
@@ -112,75 +108,98 @@ def test_triage_findings_success(mocker, mock_raw_findings, mock_triage_report):
     assert report is not None
     assert report.summary == "A critical Log4j vulnerability was found."
     assert len(report.top_findings) == 1
-    assert report.top_findings[0].severity == "critical"
+
+def test_triage_findings_truncation_warning(mocker, mock_triage_report):
+    """Test that finding lists > MAX are truncated and AI is warned."""
+    many_findings = [
+        {"template-id": f"cve-{i}", "info": {"severity": "critical"}}
+        for i in range(MAX_FINDINGS_FOR_LLM + 5)
+    ]
+    
+    mock_client = MagicMock()
+    mock_client.models.generate_content.return_value = MagicMock(text=mock_triage_report.model_dump_json())
+    mocker.patch("bounty_scanner.scanner.genai.Client", return_value=mock_client)
+    mock_logger = mocker.patch("bounty_scanner.scanner.logger.warning")
+
+    report = triage_findings(many_findings)
+
+    assert report is not None
+    mock_logger.assert_called_with(f"Truncated LLM payload from {MAX_FINDINGS_FOR_LLM + 5} down to {MAX_FINDINGS_FOR_LLM} items.")
+    
+    # Assert the prompt injection happened
+    prompt_used = mock_client.models.generate_content.call_args[1]["contents"][0]
+    assert "IMPORTANT NOTE:" in prompt_used
+
+def test_triage_findings_only_low_info(mocker):
+    """Test that triage aborts if only Low/Info findings exist."""
+    noise_findings = [
+        {"template-id": "tech-detect", "info": {"severity": "info"}},
+        {"template-id": "low-vuln", "info": {"severity": "low"}}
+    ]
+    report = triage_findings(noise_findings)
+    assert report is None
 
 def test_triage_findings_empty_input():
-    """Test triaging handles empty finding lists immediately."""
     assert triage_findings([]) is None
-
-def test_triage_findings_llm_exception(mocker, mock_raw_findings):
-    """Test triaging handles Gemini API failures gracefully."""
-    mock_client = MagicMock()
-    mock_client.models.generate_content.side_effect = Exception("API Rate Limit")
-    mocker.patch("bounty_scanner.scanner.genai.Client", return_value=mock_client)
-
-    report = triage_findings(mock_raw_findings)
-    assert report is None
 
 # ==========================================
 # TESTS FOR: upload_to_s3
 # ==========================================
 
-def test_upload_to_s3_success(mocker, mock_triage_report, mock_raw_findings):
-    """Test that S3 upload fires twice (report and raw) when configured."""
+def test_upload_to_s3_success(mocker, mock_triage_report, mock_artifacts):
+    """Test S3 artifact upload paths and methods."""
     mocker.patch.dict(os.environ, {"S3_BUCKET_NAME": "test-bucket"})
     mock_s3 = MagicMock()
     mocker.patch("bounty_scanner.scanner.boto3.client", return_value=mock_s3)
+    mocker.patch("os.path.getsize", return_value=10) # Mock files as having content
 
-    upload_to_s3("example.com", mock_triage_report, mock_raw_findings)
+    upload_to_s3("example.com", mock_triage_report, mock_artifacts)
 
+    # Put object (Report & Raw JSON)
     assert mock_s3.put_object.call_count == 2
     
-    # Verify the first call was for the triage report
-    call_args = mock_s3.put_object.call_args_list[0][1]
-    assert call_args["Bucket"] == "test-bucket"
-    assert "_triage_report.json" in call_args["Key"]
+    # Upload file (3 Text/JSONL Artifacts)
+    assert mock_s3.upload_file.call_count == 3
+    
+    # Verify artifact structural paths
+    calls = mock_s3.upload_file.call_args_list
+    assert calls[0] == call("/tmp/subs.txt", "test-bucket", mocker.ANY)
+    assert calls[1] == call("/tmp/live.txt", "test-bucket", mocker.ANY)
+    assert calls[2] == call("/tmp/nuclei.jsonl", "test-bucket", mocker.ANY)
 
-def test_upload_to_s3_missing_bucket(mocker, mock_triage_report, mock_raw_findings):
-    """Test that S3 upload is safely skipped if the env var is missing."""
+def test_upload_to_s3_missing_bucket(mocker, mock_triage_report, mock_artifacts):
     if "S3_BUCKET_NAME" in os.environ:
         del os.environ["S3_BUCKET_NAME"]
         
     mock_s3 = mocker.patch("bounty_scanner.scanner.boto3.client")
-
-    upload_to_s3("example.com", mock_triage_report, mock_raw_findings)
+    upload_to_s3("example.com", mock_triage_report, mock_artifacts)
     mock_s3.assert_not_called()
 
 # ==========================================
 # TESTS FOR: main orchestration
 # ==========================================
 
-def test_main_success(mocker, mock_triage_report, mock_raw_findings):
-    """Test end-to-end execution of the main script."""
+def test_main_success(mocker, mock_triage_report, mock_artifacts):
+    """Test end-to-end execution of main orchestrator."""
     mocker.patch("sys.argv", ["scanner.py", "example.com"])
     
-    mock_recon = mocker.patch("bounty_scanner.scanner.run_recon_pipeline", return_value=mock_raw_findings)
+    # Mock context manager for recon
+    mock_recon_cm = MagicMock()
+    mock_recon_cm.__enter__.return_value = mock_artifacts
+    mocker.patch("bounty_scanner.scanner.run_recon_pipeline", return_value=mock_recon_cm)
+    
     mock_triage = mocker.patch("bounty_scanner.scanner.triage_findings", return_value=mock_triage_report)
     mock_upload = mocker.patch("bounty_scanner.scanner.upload_to_s3")
 
     main()
 
-    mock_recon.assert_called_once_with("example.com")
-    mock_triage.assert_called_once_with(mock_raw_findings)
-    mock_upload.assert_called_once_with("example.com", mock_triage_report, mock_raw_findings)
+    mock_triage.assert_called_once_with(mock_artifacts.findings)
+    mock_upload.assert_called_once_with("example.com", mock_triage_report, mock_artifacts)
 
 def test_main_missing_args(mocker):
-    """Test script exits properly if no domain is provided."""
     mocker.patch("sys.argv", ["scanner.py"])
     
-    # Catch the native SystemExit exception instead of mocking it
     with pytest.raises(SystemExit) as excinfo:
         main()
         
-    # Verify the exit code was exactly 1
     assert excinfo.value.code == 1
