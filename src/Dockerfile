@@ -1,9 +1,9 @@
 # STAGE 1: Go Builder
 FROM golang:1.26-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS builder
 RUN apk add --no-cache git
-RUN go install -v github.com/projectdiscovery/subfinder@v1.14.0 && \
+RUN go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@v2.14.0 && \
     go install -v github.com/projectdiscovery/httpx/cmd/httpx@v1.10.0 && \
-    go install -v github.com/projectdiscovery/nuclei/cmd/nuclei@v3.11.0
+    go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@v3.11.0
 
 # STAGE 2: Python Runner
 FROM python:3.14-slim@sha256:cea0e6040540fb2b965b6e7fb5ffa00871e632eef63719f0ea54bca189ce14a6
