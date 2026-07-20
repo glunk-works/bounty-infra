@@ -37,7 +37,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
-        with: {python-version: "3.11"}
+        with: {python-version: "3.14"}
       - run: pip install hatch
       - name: Hatch Build Wheel
         run: hatch build
@@ -45,4 +45,4 @@ jobs:
         run: |
           # Ensure the wheel is generated and installable
           pip install dist/*.whl
-          python -c "import scanner; print('Build verified successfully')"
+          python -c "import bounty_scanner.scanner; print('Build verified successfully')"
