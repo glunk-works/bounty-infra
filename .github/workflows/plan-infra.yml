@@ -1,0 +1,134 @@
+name: "1a. Plan Infrastructure"
+
+# The visible half of the BI-D2 gate: every PR shows what an apply would do to AWS,
+# and `tofu-plan` is a required check on `main`, so nothing reaches infra unreviewed.
+#
+# NO `paths:` FILTER — deliberate. A required check on a path-filtered workflow
+# deadlocks: a PR touching only `docs/` never triggers the workflow, so the required
+# check sits pending forever and the PR can never merge. The job therefore runs on
+# every PR and decides internally whether there is anything to plan.
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: tofu-plan-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Job id IS the required-check context. Never add a `name:` override here —
+  # it renames the check run and silently un-requires the gate.
+  tofu-plan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v7
+        with:
+          # Full history so the merge base is available to the diff below.
+          fetch-depth: 0
+
+      # Step-level `if:` below, not a job-level `if:` — the job always runs and always
+      # reports a conclusion, which is what keeps the required check from stranding.
+      - name: Detect infra changes
+        id: changes
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          git diff --name-only "origin/${BASE_REF}...HEAD" > changed.txt
+          if grep -qE '^(infra/|\.github/workflows/(plan|deploy)-infra\.yml$)' changed.txt; then
+            echo "infra=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "infra=false" >> "$GITHUB_OUTPUT"
+            echo "No changes under infra/ — nothing to plan." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Fetch Pipeline Secrets from Infisical
+        if: steps.changes.outputs.infra == 'true'
+        uses: Infisical/secrets-action@v1.0.16
+        with:
+          method: "oidc"
+          identity-id: ${{ vars.IDENTITY_ID }}
+          oidc-audience: ${{ github.server_url }}/${{ github.repository }}
+          env-slug: "prod"
+          project-slug: "pipeline-secret-store"
+          secret-path: "/bounty-infra"
+
+      - name: Configure AWS Credentials
+        if: steps.changes.outputs.infra == 'true'
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ env.AWS_OIDC_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup OpenTofu Core
+        if: steps.changes.outputs.infra == 'true'
+        uses: opentofu/setup-opentofu@v2
+
+      - name: OpenTofu plan
+        if: steps.changes.outputs.infra == 'true'
+        working-directory: ./infra
+        run: |
+          set -euo pipefail
+
+          tofu init -input=false \
+            -backend-config="bucket=${TF_STATE_BUCKET}" \
+            -backend-config="region=${AWS_REGION}" \
+            -backend-config="dynamodb_table=${TF_STATE_LOCK_TABLE}"
+
+          # BI-D4: the plan body renders the account ID, real bucket names, subnet/SG
+          # IDs and ARNs at runtime even though none are committed. On a PUBLIC repo
+          # both PR comments and workflow artifacts are world-readable, so the body
+          # goes to a file that is never printed and never uploaded — only resource
+          # ADDRESSES and change COUNTS are published, by the next step.
+          # -lock=false: a plan must never block a concurrent apply on the state lock.
+          set +e
+          tofu plan -input=false -lock=false -no-color -detailed-exitcode \
+            -out=tfplan.bin \
+            -var="aws_region=${AWS_REGION}" \
+            -var="findings_bucket_name=${FINDINGS_BUCKET_NAME}" \
+            -var="kms_key_arn=${KMS_KEY_ARN}" \
+            >plan.stdout 2>plan.stderr
+          CODE=$?
+          set -e
+
+          # -detailed-exitcode: 0 = no changes, 2 = changes present, anything else = error.
+          if [ "$CODE" -ne 0 ] && [ "$CODE" -ne 2 ]; then
+            echo "::error::tofu plan failed (exit ${CODE}). Diagnostics follow; the plan body stays withheld."
+            cat plan.stderr
+            exit 1
+          fi
+
+      - name: Summarize plan (addresses + counts only)
+        if: steps.changes.outputs.infra == 'true'
+        working-directory: ./infra
+        run: |
+          set -euo pipefail
+          tofu show -json tfplan.bin > plan.json
+
+          {
+            echo "### OpenTofu plan"
+            echo
+            echo "_Resource addresses and change counts only — the plan body is withheld"
+            echo "because it renders account-specific values into a world-readable log (BI-D4)._"
+            echo
+            jq -r '
+              [.resource_changes[]? | select(.change.actions | index("no-op") | not)]
+              | if length == 0 then
+                  "**No changes.** Infrastructure matches configuration."
+                else
+                  ("| Action | Address |", "|---|---|"),
+                  (.[] | "| `\(.change.actions | join(","))` | `\(.address)` |"),
+                  "",
+                  "**\(length) resource change(s).** Review before merging — merging to `main` queues an apply."
+                end
+            ' plan.json
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # Nothing here is uploaded as an artifact; removed anyway so a later step
+          # cannot casually pick them up. tfplan.bin embeds full resource values.
+          rm -f tfplan.bin plan.json plan.stdout plan.stderr

@@ -1,4 +1,13 @@
-name: "1a. Deploy Infrastructure"
+name: "1b. Apply Infrastructure"
+
+# The approval half of the BI-D2 gate. This workflow no longer applies on push:
+# the `apply` job targets the protected `production` Environment, so it parks
+# awaiting a required reviewer and `tofu apply -auto-approve` runs ONLY after a
+# human has approved it. The plan a reviewer reads lives in `plan-infra.yml`,
+# which is a required check on `main`.
+#
+# A `paths:` filter is safe here (unlike on `plan-infra.yml`): a push workflow is
+# never a required check, so skipping it cannot strand a PR.
 
 on:
   push:
@@ -10,14 +19,22 @@ on:
   workflow_dispatch:
 
 permissions:
-  id-token: write 
   contents: read
+  id-token: write
+
+# Serialize applies. Never cancel one in flight — a half-applied tofu run leaves
+# state and reality out of sync.
+concurrency:
+  group: tofu-apply
+  cancel-in-progress: false
 
 jobs:
-  deploy-infra:
-    name: "Provision Infrastructure"
+  apply:
     runs-on: ubuntu-latest
-    
+    # The gate. `production` carries a required reviewer; without this line the
+    # apply would run unattended, which is finding #9.
+    environment: production
+
     steps:
       - name: Checkout Source Code
         uses: actions/checkout@v7
@@ -41,15 +58,48 @@ jobs:
       - name: Setup OpenTofu Core
         uses: opentofu/setup-opentofu@v2
 
-      - name: OpenTofu Init & Apply
-        run: |
-          tofu init \
-            -backend-config="bucket=${{ env.TF_STATE_BUCKET }}" \
-            -backend-config="region=${{ env.AWS_REGION }}" \
-            -backend-config="dynamodb_table=${{ env.TF_STATE_LOCK_TABLE }}"
-          
-          tofu apply -auto-approve \
-            -var="aws_region=${{ env.AWS_REGION }}" \
-            -var="findings_bucket_name=${{ env.FINDINGS_BUCKET_NAME }}" \
-            -var="kms_key_arn=${{ env.KMS_KEY_ARN }}"
+      - name: OpenTofu apply
         working-directory: ./infra
+        run: |
+          set -euo pipefail
+
+          tofu init -input=false \
+            -backend-config="bucket=${TF_STATE_BUCKET}" \
+            -backend-config="region=${AWS_REGION}" \
+            -backend-config="dynamodb_table=${TF_STATE_LOCK_TABLE}"
+
+          # Re-plans against current state rather than consuming the PR's plan file:
+          # that file is deliberately never uploaded (it embeds account-specific
+          # values — BI-D4), so there is no artifact to hand off. The reviewer
+          # approves the CHANGE, and the apply is re-derived at execution time.
+          #
+          # Same BI-D4 discipline as the plan job: apply output renders the account
+          # ID, bucket names and ARNs, so it goes to a file that is never printed.
+          set +e
+          tofu apply -input=false -auto-approve -no-color \
+            -var="aws_region=${AWS_REGION}" \
+            -var="findings_bucket_name=${FINDINGS_BUCKET_NAME}" \
+            -var="kms_key_arn=${KMS_KEY_ARN}" \
+            >apply.stdout 2>apply.stderr
+          CODE=$?
+          set -e
+
+          if [ "$CODE" -ne 0 ]; then
+            echo "::error::tofu apply failed (exit ${CODE}). Diagnostics follow; the apply body stays withheld."
+            cat apply.stderr
+            exit 1
+          fi
+
+          # Publish the tally only — the same shape the reviewer approved.
+          # `|| true`: grep -c exits 1 on a zero count, which a no-op apply produces
+          # legitimately; without this, `set -e` would fail a successful apply.
+          APPLIED=$(grep -cE ': (Creation|Modifications|Destruction) complete after' apply.stdout || true)
+          {
+            echo "### OpenTofu apply"
+            echo
+            echo "**${APPLIED:-0} resource change(s) applied.**"
+            echo
+            echo "_Apply body withheld — it renders account-specific values into a world-readable log (BI-D4)._"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          rm -f apply.stdout apply.stderr
