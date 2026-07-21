@@ -107,6 +107,12 @@ jobs:
           set -e
 
           # -detailed-exitcode: 0 = no changes, 2 = changes present, anything else = error.
+          # Log the code itself: it is the one bit of plan outcome that is safe to
+          # print (a state, not a value), and without it a green check is
+          # indistinguishable from a green check with pending changes anywhere
+          # except the step summary, which no API exposes.
+          echo "tofu plan exit code: ${CODE} (0 = no changes, 2 = changes present)"
+
           if [ "$CODE" -ne 0 ] && [ "$CODE" -ne 2 ]; then
             echo "::error::tofu plan failed (exit ${CODE}). Diagnostics follow; the plan body stays withheld."
             cat plan.stderr
