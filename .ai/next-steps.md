@@ -6,17 +6,17 @@ Regenerate this at the end of every working session.
 
 ## Now
 
-**S0 — Governance & CI/CD hardening: T1–T3 done; START T4.** Next model
-**Sonnet/coder** — T4 is already specified in
-`sprints/S0_governance_hardening/sprint_plan.md`, so this is executing a written spec, not
-designing one.
+**S0 — Governance & CI/CD hardening: ALL FOUR TASKS DONE.** S0 is closed (#6, #8, #9, #10 all
+remediated and behaviorally verified). Next model **Opus/architect** — S1 (scanner security
+core, #7/#13) needs its own planning pass at the scanner's boundary before any Sonnet
+implementation starts; see `docs/hardening_roadmap.md`'s sprint sequence.
 
 | Task | State |
 |---|---|
 | **T1** branch protection + method scaffold | ✅ ruleset · scaffold (#24) · required-checks list (landed with T3, PR #27) |
 | **T2** gated OpenTofu deploy (#9) | ✅ **verified end to end** — plan no-op on PR; apply approved → applied (#25, #26) |
 | **T3** non-bypassable CI (#8) | ✅ **done** (PR #27) — all 5 parts (a–e); see below |
-| **T4** `run-scan.yml` injection fix (#6) + drop unused token (#10) | ⬜ not started — **next** |
+| **T4** `run-scan.yml` injection fix (#6) + drop unused token (#10) | ✅ **done and verified end-to-end** (PR #29) — see below |
 
 ## Just done (2026-07-21) — T3, non-bypassable CI (#8), PR #27
 
@@ -119,18 +119,62 @@ model that cannot be reviewed in a diff.
 would make merely *opening* a PR grant apply-capable credentials with no approval —
 workflow changes in a PR take effect for `pull_request` runs — re-opening #9 sideways.
 
-## Next — T4, `run-scan.yml` injection fix (#6) + drop unused token (#10)
+## Just done (2026-07-21) — T4, `run-scan.yml` injection fix (#6) + drop unused token (#10), PR #29
 
-Rewrite the *Trigger Scan Task* step so no `${{ github.event.inputs.* }}` is interpolated
-inline into a `run:` shell block: pass the four dispatch inputs via `env:`, build the ECS
-`--overrides` JSON with `jq -n --arg`, add a strict hostname regex on `target_domain`, drop
-`GITHUB_TOKEN`/`issues: write` (unused — the scanner only writes to S3). **Verification is
-behavioral, not structural** — dispatch a `'`-containing `target_domain` and prove it's
-rejected, don't just eyeball the `jq` rewrite. loop-orchestrator's `ruleset-drift.yml` (now
-ported here too) is cited in the sprint plan as the in-house reference shape for the
-`env:`/`jq` pattern. **T4 blocks loop-orchestrator #18** (its `seed`/`token` inputs need to
-ride this safe pattern), so this is the last thing standing between S0 and that cross-repo
-unblock.
+- Rewrote the *Trigger Scan Task* step: all four `workflow_dispatch` inputs now ride `env:`
+  (`inputs.*`, not `github.event.inputs.*` inline in `run:`), the ECS `--overrides` JSON is
+  built with `jq -n --arg` instead of string-concatenated JSON, and a new **`Validate
+  target_domain`** step runs a strict hostname regex before any AWS call. Also dropped the
+  unused `GITHUB_TOKEN`/`GITHUB_REPOSITORY` container env vars and `issues: write` (#10) —
+  confirmed via grep that `scanner.py` only ever reads `S3_BUCKET_NAME`, already supplied by
+  the task definition itself, and makes no GitHub API call.
+- **Verified behaviorally on `main`, not just read** (three dispatches, in order):
+  1. A `'`-containing `target_domain` was rejected at the new `Validate target_domain` step
+     — confirmed no `aws ecs run-task` call happened.
+  2. A dispatch from the **PR branch** hit `401 Access denied: OIDC claim not allowed` at the
+     Infisical step, before the domain check ever ran — expected, not a fix defect: this
+     workflow's identity is bound to `ref: refs/heads/main` (see credential-model table
+     above), so `workflow_dispatch` from a non-`main` ref can never get past secrets-fetch.
+     **Behavioral verification of `workflow_dispatch`-only workflows has to happen after
+     merge**, the same as T2's plan/apply gate.
+  3. Post-merge, a real dispatch against `scanme.nmap.org` on `main` completed with
+     `Task exited with code: 0` and findings exported to S3 — full round trip proven.
+- **Two more bugs surfaced by that behavioral testing, both fixed in follow-on PRs (not part
+  of #6/#10, discovered only because verification was behavioral):**
+  - **PR #30 — duplicate entrypoint.** `src/Dockerfile`'s `ENTRYPOINT` is
+    `["python", "-m", "bounty_scanner.scanner"]`. ECS `containerOverrides.command` replaces
+    Docker `CMD` only — it does **not** touch `ENTRYPOINT` — so Docker always execs
+    `ENTRYPOINT + CMD`. The override `command` array had *also* carried
+    `"python", "-m", "bounty_scanner.scanner"` as its first three tokens since before this
+    sprint, so the real container argv doubled the module invocation:
+    `python -m bounty_scanner.scanner python -m bounty_scanner.scanner <domain> ...`. Python's
+    own arg parsing eats the first `-m bounty_scanner.scanner`, leaving `sys.argv[1:] =
+    ["python", "-m", "bounty_scanner.scanner", "<domain>", ...]` for the scanner's `argparse`
+    — `domain` became the literal string `"python"`, and the stray `-m` token made `argparse`
+    call `parser.error()` (container exit code 2). **Latent since the entrypoint became the
+    module form (`f20b30f`, 2026-06-26)** — masked before T3(d) because a mutable `:latest`
+    image could be stale relative to whatever `run-scan.yml` on `main` expected; T3(d)'s
+    sha-pinned, CI-gated rollouts made the deployed image track the current commit exactly,
+    which is what finally exposed it. Fix: override `command` now carries only
+    `[$domain, "--severities", ..., "--timeout", ..., "--max-findings", ...]` — the image's
+    `ENTRYPOINT` already supplies the interpreter/module prefix.
+  - **`glunk-works/global-bootstrap` — missing `ecs:DescribeTasks`.** After #30 landed, the
+    task still launched but the workflow's `aws ecs wait tasks-stopped` failed immediately
+    with `AccessDeniedException` — the `github-actions-bounty-infra` role could `RunTask` but
+    not `DescribeTasks`/`StopTask`. Fixed in `global-bootstrap` PR #2
+    (`fix(iam): grant ECS task execution perms and the ECS service-linked role`), which had
+    *already merged* before this was even hit (a coincidental same-day fix) but had not yet
+    been **applied** — `global-bootstrap` has no CI/CD by design (state-bootstrapping repo,
+    applied only from a local terminal with the owner's own AWS session; see its README).
+    Owner ran `tofu apply` (1 IAM change) and the very next dispatch went green. **This is
+    the second time in this session an AWS-side permissions gap blocked a `bounty-infra`
+    workflow and the fix lived in a different repo** — see the credential-model note above
+    about `global-bootstrap` owning every OIDC role; the same is true of the workload IAM
+    policies attached to those roles.
+- loop-orchestrator's `ruleset-drift.yml` (ported here in T3) was the cited in-house
+  reference shape for the `env:`/`jq` pattern this task followed.
+- **#6 blocks loop-orchestrator #18 — now unblocked.** Its `seed`/`token` dispatch inputs can
+  ride this same safe `env:` + `jq --arg` pattern.
 
 ## Gotchas worth remembering
 
@@ -187,6 +231,28 @@ unblock.
   And before trusting this file's own "Now" section, or deleting any merged branch, run
   `git log origin/<branch> --not origin/main` to make sure nothing on it is still stranded.
 - Never commit to `main`, never merge your own PR, never force-push a pushed branch.
+- **ECS `containerOverrides.command` replaces Docker `CMD`, never `ENTRYPOINT`.** If the
+  image's `ENTRYPOINT` already invokes the interpreter/module (`src/Dockerfile`:
+  `["python", "-m", "bounty_scanner.scanner"]`), the override `command` array must carry
+  **only** the module's own arguments — repeating the interpreter/module prefix there
+  duplicates it in the real container argv (T4, PR #30). This bug was latent for weeks,
+  masked by mutable `:latest` image staleness, and was only exposed once T3(d) made deployed
+  images track the current commit exactly — a reminder that fixing one gate (sha-pinning) can
+  surface bugs a looser previous state was accidentally hiding.
+- **A `workflow_dispatch`-only workflow's identity can't be behaviorally tested from a PR
+  branch.** `run-scan.yml` (and any workflow without a `pull_request` trigger) presents
+  `ref: refs/heads/<branch>` when dispatched from a non-`main` branch, which the Infisical
+  identity rejects (`401`) before the workflow body ever runs. Verify these behaviorally
+  **after merge**, same discipline as T2's plan/apply gate — don't read a pre-merge dispatch
+  failure as a defect in the change under test without checking which step it died on.
+- **Workload IAM policies, like OIDC roles, live in `glunk-works/global-bootstrap`, not
+  here — and that repo applies only from a local terminal, never CI.** `global-bootstrap` has
+  no `.github/workflows/` by design (it bootstraps the state backend + IAM foundation other
+  repos' CI depends on, so it can't depend on its own CI to deploy itself). A merged PR there
+  is **code, not effect** until someone runs `tofu apply` locally with their own AWS session.
+  Hit twice in T2 (OIDC subject/role) and again in T4 (`ecs:DescribeTasks`) — when a
+  `bounty-infra` workflow fails on an AWS permissions error, check `global-bootstrap`'s
+  `project_policies.tf`/`plan_roles.tf` before assuming the bug is local.
 
 ## OPEN — not scheduled anywhere
 
@@ -202,10 +268,13 @@ unblock.
   code review, unlike the AWS half (`global-bootstrap` Terraform). Lose or alter that config
   and nothing detects it — the failure surfaces as a 403 at deploy time. Infisical does ship
   a Terraform provider if this is ever worth closing.
-- **`glunk-works/global-bootstrap`: the `ecs:RunTask` scoping is inert.** `RunTask` is
-  granted both in the ARN-scoped statement and in the broad `Resource = "*"` one, so the
-  scoping restricts nothing. Removing it from the broad list makes it real (noted on
-  global-bootstrap#2, never filed as an issue).
+- **`glunk-works/global-bootstrap`: the `ecs:RunTask` scoping is still inert.** `RunTask` is
+  granted both in the ARN-scoped `AllowECSTaskExecutionAndMonitoring` statement and in the
+  broad `Resource = "*"` statement (`project_policies.tf`), so the scoping restricts nothing.
+  **Not fixed by global-bootstrap PR #2** — that PR added `DescribeTasks`/`StopTask` to the
+  scoped statement (closing the T4 blocker) but left the broad statement's `RunTask` in
+  place. Removing it from the broad list makes the scoping real (noted on
+  global-bootstrap#2, never filed as its own issue).
 
 ## Pointers
 
@@ -214,5 +283,8 @@ unblock.
   — the S0 plan (T1–T4, acceptance criteria, risks).
 - Issues **#6–#14** (2026-07-19 review), **#18** (recon dispatch contract, cross-repo),
   **#19** (adopt the working method — this sprint).
+- PRs **#29** (T4 injection fix + token drop), **#30** (duplicate-entrypoint fix, found via
+  #29's behavioral verification); `glunk-works/global-bootstrap` **PR #2**
+  (`ecs:DescribeTasks`/`StopTask` grant, applied 2026-07-21).
 - Draft advisories `GHSA-59j8-c4rc-2jf4` (#6), `GHSA-pf9q-vx7g-f8gr` (#7),
   `GHSA-p3hr-h7cq-xp5m` (#13) — publish as each sprint closes.
