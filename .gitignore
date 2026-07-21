@@ -51,6 +51,10 @@ MANIFEST
 /ENV/
 .env
 
+# Dev-workflow cursor: session-local scratch state.
+# .ai/next-steps.md IS committed — it is what travels between sessions.
+.ai/state.json
+
 # VS Code / OS
 .vscode/
 .DS_StoreThumbs.db
