@@ -6,18 +6,63 @@ Regenerate this at the end of every working session.
 
 ## Now
 
-**S0 — Governance & CI/CD hardening: T2 in flight.** T1 is done bar the required-checks
-list; this PR lands T2. Next model **Sonnet/coder** for T3–T4 (each is an already-specified
-task in `sprints/S0_governance_hardening/sprint_plan.md`).
+**S0 — Governance & CI/CD hardening: T1–T3 done; START T4.** Next model
+**Sonnet/coder** — T4 is already specified in
+`sprints/S0_governance_hardening/sprint_plan.md`, so this is executing a written spec, not
+designing one.
 
 | Task | State |
 |---|---|
-| **T1** branch protection + method scaffold | ruleset ✅ · scaffold ✅ (#24) · required-checks list ⬜ (deferred to end of S0) |
-| **T2** gated OpenTofu deploy (#9) | ✅ plan path verified live (no-op plan, exit 0) — **apply path not yet exercised** |
-| **T3** non-bypassable CI (#8) | ⬜ not started |
-| **T4** `run-scan.yml` injection fix (#6) + drop unused token (#10) | ⬜ not started |
+| **T1** branch protection + method scaffold | ✅ ruleset · scaffold (#24) · required-checks list (landed with T3, PR #27) |
+| **T2** gated OpenTofu deploy (#9) | ✅ **verified end to end** — plan no-op on PR; apply approved → applied (#25, #26) |
+| **T3** non-bypassable CI (#8) | ✅ **done** (PR #27) — all 5 parts (a–e); see below |
+| **T4** `run-scan.yml` injection fix (#6) + drop unused token (#10) | ⬜ not started — **next** |
 
-## Just done (2026-07-21)
+## Just done (2026-07-21) — T3, non-bypassable CI (#8), PR #27
+
+- **(a)** `ci.yml` dropped its `paths:` filter — runs on every PR, no deadlock risk.
+- **(b)** Split the old combined `validate` job into `lint` + `test` job ids, no
+  `name:` overrides anywhere in `ci.yml` — job id is now exactly the required-check
+  context.
+- **(c)** New credential-free `tofu-validate` job: `fmt -check -recursive`,
+  `init -backend=false && validate`, pinned `tflint` (`terraform-linters/setup-tflint@v6`,
+  tflint `v0.64.0` — verified both tags exist via the GitHub API before pinning, since a
+  wrong guess would have broken CI on the first run).
+- **(d)** `build-image.yml` no longer pushes `:latest`. It pushes only
+  `:${{ github.sha }}` and calls `aws ecs register-task-definition` directly to roll that
+  image into a new task-definition revision — bypassing Tofu **on purpose** for just this
+  field. `infra/main.tf`'s `aws_ecs_task_definition.scanner_task` now carries
+  `lifecycle.ignore_changes = [container_definitions]` so Tofu stops reverting CI's
+  rollouts on the next unrelated apply. New `variable "image_tag"` (default `"latest"`) is
+  bootstrap-only — confirmed via a real `tofu-plan` run that this produces **zero diff**
+  against current state (the default matches what's already deployed, so nothing broke).
+  **This is a real architectural call, not literally spelled out in the sprint plan** — CI
+  now owns image rollouts for this one field; BI-D2's plan+approval gate still covers
+  everything else in that resource. User confirmed this design before it was pushed. If
+  the OPEN compute-model question (Fargate/Docker vs. Ansible) is ever resolved, revisit
+  this split.
+- **(e)** Ported loop-orchestrator's `ruleset-drift.yml` structure, retargeted at this
+  repo's 4-check taxonomy (`lint`, `test`, `tofu-validate`, `tofu-plan`) instead of
+  loop-orchestrator's 8. Verified via `workflow_dispatch` against the live ruleset —
+  passes clean (run 29859578890).
+- **Required-status-checks applied to the live ruleset** (the piece T1 deferred): fetched
+  loop-orchestrator's live `required_status_checks` parameters first
+  (`strict_required_status_checks_policy: false`, `do_not_enforce_on_create: false`) and
+  mirrored the shape exactly rather than guessing. Applied only after all 4 checks had
+  already run green on PR #27 — never require a check that hasn't reported yet.
+  `GET /repos/glunk-works/bounty-infra/rules/branches/main` now shows all 4 rule types
+  (`deletion`, `non_fast_forward`, `pull_request`, `required_status_checks`) and all 4
+  contexts.
+- **Recovered a second stranded-commit incident** (same shape as the T2 one below, #26):
+  `docs/s0-t2-verified-credential-model`'s final commit (this section's "point the cursor
+  at T3" update) was pushed ~2 minutes *after* PR #26 squash-merged, so `main` never got
+  it — this file's own "Now" section still read "START T3" as of a fresh `main` pull.
+  Cherry-picked it onto the T3 branch before writing this update. **The gotcha below about
+  checking `git log origin/<branch> --not main` before trusting a branch is done applies
+  to reading this very file, not just deleting branches** — always diff against `origin/main`
+  before trusting a cursor file's "Now" section.
+
+## Previously done (2026-07-21)
 
 - **Ruleset `protected-integration-branches`** (id `19438326`) active on `refs/heads/main`:
   `pull_request` + `deletion` + `non_fast_forward`, `bypass_actors: []`,
@@ -74,31 +119,36 @@ model that cannot be reviewed in a diff.
 would make merely *opening* a PR grant apply-capable credentials with no approval —
 workflow changes in a PR take effect for `pull_request` runs — re-opening #9 sideways.
 
-## Next — T3, non-bypassable CI (#8)
+## Next — T4, `run-scan.yml` injection fix (#6) + drop unused token (#10)
 
-Five parts, all specified in the sprint plan: (a) drop `ci.yml`'s `paths:` filters,
-(b) rename jobs to `lint`/`test` and drop the `name:` overrides, (c) add a credential-free
-`tofu-validate` job (`fmt -check`, `init -backend=false && validate`, pinned `tflint`),
-(d) gate `build-image.yml` on CI green and deploy a sha-pinned image instead of `:latest`,
-(e) port loop-orchestrator's `ruleset-drift.yml`. **(d) is the one that matters most** —
-without it, T2's infra gate is a false gate.
+Rewrite the *Trigger Scan Task* step so no `${{ github.event.inputs.* }}` is interpolated
+inline into a `run:` shell block: pass the four dispatch inputs via `env:`, build the ECS
+`--overrides` JSON with `jq -n --arg`, add a strict hostname regex on `target_domain`, drop
+`GITHUB_TOKEN`/`issues: write` (unused — the scanner only writes to S3). **Verification is
+behavioral, not structural** — dispatch a `'`-containing `target_domain` and prove it's
+rejected, don't just eyeball the `jq` rewrite. loop-orchestrator's `ruleset-drift.yml` (now
+ported here too) is cited in the sprint plan as the in-house reference shape for the
+`env:`/`jq` pattern. **T4 blocks loop-orchestrator #18** (its `seed`/`token` inputs need to
+ride this safe pattern), so this is the last thing standing between S0 and that cross-repo
+unblock.
 
 ## Gotchas worth remembering
 
 - **Never require a status check that does not exist yet** — it strands every open PR.
-  The required-checks list is applied at the **end** of S0, after T2/T3's jobs have run
-  once, and must match the T3 taxonomy (`lint`, `test`, `tofu-validate`, `tofu-plan`).
+  **Resolved for T3's taxonomy** (`lint`, `test`, `tofu-validate`, `tofu-plan` — all
+  required on `main` now), but the principle stands for whatever T4 or a later sprint adds.
 - **Required checks match by check-run name = job id.** Do not add a `name:` override to a
-  gated job; `ci.yml` currently has `name: "Lint & Test"` / `"Hatch Build & Validate"`,
-  which T3 removes.
-- **`ruleset-drift.yml` (T3e) must NOT be a required check and must NOT be a job in
-  `ci.yml`** — a required check is required only because the ruleset says so, so making
-  the drift guard required would un-require it the instant the ruleset it watches is
-  deleted, silently, on the exact failure it exists to catch (loop-orchestrator FD2).
-- **`build-image.yml` is the missing half of #8.** It pushes `:latest` to a `MUTABLE` ECR
-  repo and the task definition runs `…:latest`, so merging any `src/**` change silently
-  replaces production Fargate code with no CI, no plan, no approval. Gating the infra apply
-  (T2) while leaving this open would be a **false gate**.
+  gated job — `ci.yml`'s jobs are bare (`lint`, `test`, `tofu-validate`) since T3; keep it
+  that way.
+- **`ruleset-drift.yml` must NOT be a required check and must NOT be a job in `ci.yml`** —
+  a required check is required only because the ruleset says so, so making the drift guard
+  required would un-require it the instant the ruleset it watches is deleted, silently, on
+  the exact failure it exists to catch (loop-orchestrator FD2).
+- **`build-image.yml` was the missing half of #8 — fixed in T3(d).** It used to push
+  `:latest` to a `MUTABLE` ECR repo with no CI dependency, so merging any `src/**` change
+  silently replaced production Fargate code. Now sha-pinned + CI-gated (see T3 above); the
+  ECR repo itself is still `MUTABLE` (left alone — only the task-definition image
+  reference and the tag scheme changed).
 - **#6 verification is behavioral, not structural** — dispatch a `'`-containing
   `target_domain` and prove it is rejected, don't just eyeball the `jq` rewrite.
 - **#6 blocks loop-orchestrator #18.** Its `seed`/`token` inputs must ride T4's safe
@@ -127,6 +177,15 @@ without it, T2's infra gate is a false gate.
 - **The `production` Environment is what makes `deploy-infra.yml` safe, not the YAML.**
   If `environment: production` ever names an environment that does not exist, GitHub
   auto-creates it **unprotected** and the apply runs unattended — silently re-opening #9.
+- **Pushing to a branch after its PR merges silently drops the work — this has now
+  happened three times in a row** (#25→#26, then again #26→#27, then again on #27's own
+  branch, recovered by branching fresh from `main` rather than a third cherry-pick chain).
+  The reviewer can merge the moment required checks go green; a cursor-file update queued
+  right after tends to lose the race. **Before pushing a docs-only follow-up to an
+  already-open PR's branch, check `gh pr view <N> --json state` first** — if it says
+  `MERGED`, branch fresh from `main` instead of pushing more commits to the dead branch.
+  And before trusting this file's own "Now" section, or deleting any merged branch, run
+  `git log origin/<branch> --not origin/main` to make sure nothing on it is still stranded.
 - Never commit to `main`, never merge your own PR, never force-push a pushed branch.
 
 ## OPEN — not scheduled anywhere
@@ -139,6 +198,14 @@ without it, T2's infra gate is a false gate.
   the S3 output path all three sprints assume.
 - **The central conventions repo (BI-D3).** `CLAUDE.md` points at loop-orchestrator's
   `conventions.md` as the interim source; re-point once the central repo exists.
+- **Infisical has no IaC.** Both machine identities are hand-configured and invisible to
+  code review, unlike the AWS half (`global-bootstrap` Terraform). Lose or alter that config
+  and nothing detects it — the failure surfaces as a 403 at deploy time. Infisical does ship
+  a Terraform provider if this is ever worth closing.
+- **`glunk-works/global-bootstrap`: the `ecs:RunTask` scoping is inert.** `RunTask` is
+  granted both in the ARN-scoped statement and in the broad `Resource = "*"` one, so the
+  scoping restricts nothing. Removing it from the broad list makes it real (noted on
+  global-bootstrap#2, never filed as an issue).
 
 ## Pointers
 
