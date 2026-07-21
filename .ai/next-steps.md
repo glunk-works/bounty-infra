@@ -11,31 +11,30 @@ architecture pass is also done — BI-D5 is locked** (2026-07-21): scan egress l
 per-scan ephemeral VMs on **Vultr**; AWS keeps the control plane. See
 `docs/hardening_roadmap.md` § *RESOLVED — compute-model architecture decision*.
 
-**SG-partial done in two PRs** (2026-07-21): `dependency-audit`, `sbom`, `pr-title` (#34,
-merged) then `zizmor` + full action pinning + `persist-credentials: false` (this PR — see
-below). **Only `secrets-scan` is left in SG-partial**, blocked on `GITLEAKS_LICENSE` at org
-level (gitleaks-action requires a licence for organization accounts regardless of repo
-visibility; bounty-infra has no repo secrets today, loop-orchestrator has it as a repo
-secret). Owner will add it org-wide next time at the keyboard.
+**SG-partial is done — three PRs, all merged or ready** (2026-07-21): `dependency-audit`,
+`sbom`, `pr-title` (#34, merged); `zizmor` + full action pinning + `persist-credentials: false`
+(#35, merged); `secrets-scan` (#36, all 10 checks green, awaiting merge) — `GITLEAKS_LICENSE`
+landed as a `glunk-works` org secret. `ci.yml` now runs 9 jobs on every PR:
+`lint`/`test`/`package`/`tofu-validate`/`tofu-plan`/`dependency-audit`/`sbom`/`secrets-scan`/
+`zizmor`, plus `pr-title` in its own workflow.
 
 **Next action — pick one of two, they are independent:**
 
-1. **Finish SG** — add `secrets-scan` once `GITLEAKS_LICENSE` exists at org level (mirror
-   loop-orchestrator's job). Model **Sonnet**.
-2. **SE — the egress migration itself.** Model **Opus** for the task-level plan (credential
+1. **SE — the egress migration itself.** Model **Opus** for the task-level plan (credential
    delivery to an ephemeral VM is a real design question), then Sonnet to implement.
+2. **S1** planning pass (#7/#13, plus new **#32**) at the scanner's boundary. Model **Opus**.
 
-**S1** (#7/#13, plus new **#32**) still needs its own Opus planning pass at the scanner's
-boundary, and is independent of both of the above.
-
-**Do not start the IaC security scan or the container image scan yet** — both are SG gates that
+**Do not start the IaC security scan or the container image scan** — both are SG gates that
 should follow SE (see the ordering note in the roadmap's sprint sequence).
 
-**Once this PR's checks report green, add `zizmor` to the required-checks list** on the
-`protected-integration-branches` ruleset (same discipline as every other required check:
-never require one that hasn't reported yet) — and update `ruleset-drift.yml`'s taxonomy
-(`lint`, `test`, `tofu-validate`, `tofu-plan`) to include it in the same change, or the drift
-guard will flag itself as out of sync with what it's supposed to watch.
+**Once #34/#35/#36 have all reported green on `main` (not just on their own PRs), add
+`dependency-audit`, `sbom`, `secrets-scan`, and `zizmor` to the required-checks list** on the
+`protected-integration-branches` ruleset in one batch (same discipline as ever: never require a
+check that hasn't reported yet) — and update `ruleset-drift.yml`'s taxonomy in the same change,
+or the drift guard flags itself as out of sync with what it's supposed to watch. `pr-title` was
+deliberately left off that list before (loop-orchestrator's BL-10 lesson: a title-only check
+gating nothing is fine ungated) — decide whether the same reasoning still applies now that it's
+one of several SG additions, or whether it should join the others.
 
 | Task | State |
 |---|---|
@@ -229,6 +228,22 @@ The roadmap's OPEN compute question is **resolved**. Full record in
   abuse complaint being filed."
 - **Sprint sequence gained SG (CI gate expansion) and SE (egress migration)**, and **S2's #11
   is re-scoped** — it targets a Fargate task role BI-D5 retires.
+
+## Just done (2026-07-21) — secrets-scan (gitleaks), PR #36, closing SG-partial
+
+- `.gitleaks.toml` ported verbatim from loop-orchestrator (`useDefault = true`).
+- Before adding the job, read gitleaks-action's actual `src/gitleaks.js` rather than trust its
+  README — the default `GITLEAKS_ENABLE_COMMENTS`/`GITLEAKS_ENABLE_UPLOAD_ARTIFACT: true`
+  raised an obvious question for a **public** repo: does a real detected secret get its
+  cleartext value re-broadcast into a world-readable PR comment or artifact? **No** — the
+  action hardcodes `--redact` on every invocation, unconditionally. Job log, SARIF artifact,
+  and PR comment all omit the actual match; only rule id/file/line/commit sha ever appear.
+  That's what made it safe to leave defaults alone rather than invent a deviation.
+- No `pull-requests: write` granted (matches loop-orchestrator). The action's PR-comment step
+  403s without it but that's caught and logged as a warning, not a job failure — the required
+  check's pass/fail is the scan result itself.
+- Verified: all 10 checks green on PR #36, `secrets-scan` itself in 6s — confirms the org
+  secret authenticated correctly on first try.
 
 ## Just done (2026-07-21) — zizmor gate + full action pinning, ci/zizmor-and-pinning
 
