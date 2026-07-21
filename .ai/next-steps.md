@@ -13,7 +13,7 @@ task in `sprints/S0_governance_hardening/sprint_plan.md`).
 | Task | State |
 |---|---|
 | **T1** branch protection + method scaffold | ruleset ✅ · scaffold ✅ (#24) · required-checks list ⬜ (deferred to end of S0) |
-| **T2** gated OpenTofu deploy (#9) | ⚠️ code complete (this PR) — **BLOCKED on owner-side credential setup**, see below |
+| **T2** gated OpenTofu deploy (#9) | ✅ plan path verified live (no-op plan, exit 0) — **apply path not yet exercised** |
 | **T3** non-bypassable CI (#8) | ⬜ not started |
 | **T4** `run-scan.yml` injection fix (#6) + drop unused token (#10) | ⬜ not started |
 
@@ -33,34 +33,46 @@ task in `sprints/S0_governance_hardening/sprint_plan.md`).
 - **T2 gated deploy** (this PR) — `plan-infra.yml` (job `tofu-plan`, every PR, summary-only
   output) + `deploy-infra.yml` (job `apply`, `environment: production`). The `production`
   Environment is live: required reviewer `Seuss27`, `prevent_self_review: false`,
-  deployments restricted to `main`. Four deviations from the plan as written are recorded
+  deployments restricted to `main`. **Five deviations** from the plan as written are recorded
   in the sprint plan's T2 entry — read them before touching either workflow.
+  **Both paths verified live 2026-07-21:** plan gave `tofu plan exit code: 0` (no-op against
+  real state); apply parked for approval, was approved, authenticated, and applied a no-op.
 
-## BLOCKED — T2 needs a read-only plan identity (owner action, outside this repo)
+## Credential model for the two infra workflows (verified end-to-end 2026-07-21)
 
-The first live `tofu-plan` run failed `403 Access denied: OIDC subject not allowed`. On
-`push` the OIDC subject is `repo:glunk-works/bounty-infra:ref:refs/heads/main`; on
-`pull_request` it is `repo:glunk-works/bounty-infra:pull_request`. **Do not fix this by
-adding `pull_request` to the existing identity** — workflow changes in a PR take effect
-for `pull_request` runs, so that would make merely *opening* a PR grant apply-capable AWS
-credentials with no approval, re-opening #9 through the side door. Owner decided
-2026-07-21: a separate read-only identity. Setup, in order:
+Two OIDC hops, each validating independently: GitHub → Infisical (audience
+`https://github.com/glunk-works/bounty-infra`), then Infisical's `AWS_*_ROLE_ARN` → AWS
+(audience `sts.amazonaws.com`). **The two hops bind on different things** — that asymmetry
+is the whole lesson of T2:
 
-1. **AWS** — ✅ written as code in **`glunk-works/global-bootstrap` PR #1** (`plan_roles.tf`);
-   owner action is to review and `tofu apply` it, then read the ARN from the new
-   `github_actions_plan_role_arns` output. **The OIDC roles are managed in
-   `global-bootstrap`, not bootstrapped by hand** — its per-project role trusts
-   `sub = repo:<org>/<repo>:ref:refs/heads/main`, which is exactly why PR runs 403.
-   The new role is read-only, `:pull_request`-scoped, state-prefix-limited, and carries an
-   explicit `Deny` on the findings bucket.
-2. **Infisical** — second machine identity, subject allowlist exactly
-   `repo:glunk-works/bounty-infra:pull_request`, read access at `/bounty-infra` (`prod`) to
-   `AWS_REGION`, `TF_STATE_BUCKET`, `TF_STATE_LOCK_TABLE`, `FINDINGS_BUCKET_NAME`,
-   `KMS_KEY_ARN`, plus a **new** `AWS_PLAN_ROLE_ARN`. It must **not** read `AWS_OIDC_ROLE_ARN`.
-3. **GitHub** — repo variable `PLAN_IDENTITY_ID` = the new identity's id.
+| Path | Infisical identity | Infisical binds on | AWS role | AWS trusts subject |
+|---|---|---|---|---|
+| plan (PR) | `vars.PLAN_IDENTITY_ID` | subject `:pull_request` | `github-actions-bounty-infra-plan` | `:pull_request` |
+| apply (merge/dispatch) | `vars.IDENTITY_ID` | **claims** `repository` + `ref` | `github-actions-bounty-infra` | `:ref:refs/heads/main` **+** `:environment:production` |
 
-`plan-infra.yml` is already written against this contract. Once it exists, re-run the
-`tofu-plan` check on the T2 PR and confirm a **no-op plan** before merging.
+**Why the apply identity binds on claims, not subject.** Adding `environment: production`
+changed the job's `sub` to `:environment:production`, but that identity is shared with
+`build-image.yml` and `run-scan.yml`, which still present `:ref:refs/heads/main` — and
+Infisical's **Subject field holds one value** (globs, but no reliable list; a
+comma-separated pair was tried and rejected with 403). A glob wide enough for both
+(`repo:…:*`) would also match `:pull_request` and hand the apply identity to every PR.
+So the binding moved to the claims that are **invariant to the environment**:
+
+- `repository` = `glunk-works/bounty-infra`
+- `ref` = `refs/heads/main`
+
+Equivalent, not looser: for the non-environment workflows `sub` encodes exactly
+`repository` + `ref`, so the same jobs are admitted plus the environment-gated apply. PR
+runs still fail — their `ref` is `refs/pull/N/merge`.
+
+The plan role is read-only, state-prefix-limited, and carries an explicit `Deny` on the
+findings bucket. AWS side is code in `glunk-works/global-bootstrap` (`plan_roles.tf`);
+**the Infisical side has no IaC** and was configured by hand — it is the one part of this
+model that cannot be reviewed in a diff.
+
+**Never merge the two identities.** Widening the apply identity to accept `:pull_request`
+would make merely *opening* a PR grant apply-capable credentials with no approval —
+workflow changes in a PR take effect for `pull_request` runs — re-opening #9 sideways.
 
 ## Next — T3, non-bypassable CI (#8)
 
@@ -98,6 +110,20 @@ without it, T2's infra gate is a false gate.
 - **Never upload `tfplan.bin` or a plan/apply body as an artifact or PR comment.** It
   embeds the account ID, bucket names, subnet/SG IDs and ARNs, and on a public repo
   artifacts are as world-readable as comments (BI-D4). Publish addresses + counts only.
+- **Adding an `environment:` to a job CHANGES its OIDC subject.** GitHub's subject filters
+  are ordered: an Environment wins over `pull_request`, which wins over the branch ref. So
+  a job that gains `environment: production` stops presenting `:ref:refs/heads/main` and
+  starts presenting `:environment:production` — invalidating its credentials at **both**
+  hops. Changing a job's trigger or environment is a change to its **identity**. Where the
+  verifier takes a list (the AWS trust condition) **append**, never replace, because
+  sibling workflows on the same role still use the old subject; where it takes one value
+  (Infisical's Subject) **bind on `repository` + `ref` claims instead** — they don't move
+  when an environment is added. Never paper over it with a `repo:…:*` glob: that matches
+  `:pull_request` too.
+- **`deploy-infra.yml` self-triggers.** Its `paths:` filter includes its own file, so a PR
+  that edits the workflow queues an apply on merge — even with no `infra/**` change. Useful
+  (workflow edits get exercised immediately) but easy to misjudge: I predicted merging T2
+  would not trigger an apply, and it did.
 - **The `production` Environment is what makes `deploy-infra.yml` safe, not the YAML.**
   If `environment: production` ever names an environment that does not exist, GitHub
   auto-creates it **unprotected** and the apply runs unattended — silently re-opening #9.

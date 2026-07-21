@@ -58,6 +58,15 @@ Everything below is bounty-infra's **local extension**.
 - **Never `pull_request_target`.** Fork PRs get no secrets, and that is the correct
   outcome — `pull_request_target` would hand repo-scoped credentials to fork-controlled
   code. Accepted consequence: a credentialed check can never go green for a fork.
+- **A job's OIDC subject is derived from its trigger and its `environment:`, in that
+  precedence: Environment > `pull_request` > branch ref.** Adding `environment: X` to a job
+  makes it present `repo:<org>/<repo>:environment:X` *instead of* the branch subject, which
+  breaks auth at both hops until each is updated. Treat a trigger/environment change as a
+  change to the job's identity. Where the verifier takes a list (the AWS trust condition)
+  **append** the new subject — never replace, since sibling workflows share the role. Where
+  it takes a single value (Infisical's Subject) **bind on the `repository` + `ref` claims
+  instead**: they are invariant to the environment. Never widen with a `repo:…:*` glob —
+  in OIDC auth `*` matches `:` too, so it also admits `:pull_request`.
 - Pin third-party actions to a **commit SHA**, not a floating tag — a mutable tag on an
   action that receives OIDC claims is a credential-handoff to whoever moves the tag.
 - **Secrets and identity never reach a workflow log.** No `aws sts get-caller-identity`
