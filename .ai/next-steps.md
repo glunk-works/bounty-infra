@@ -46,9 +46,13 @@ for `pull_request` runs, so that would make merely *opening* a PR grant apply-ca
 credentials with no approval, re-opening #9 through the side door. Owner decided
 2026-07-21: a separate read-only identity. Setup, in order:
 
-1. **AWS** — read-only role, trust conditioned on `sub = repo:glunk-works/bounty-infra:pull_request`,
-   `aud = sts.amazonaws.com`; attach `ReadOnlyAccess`. No KMS grant (state is SSE-S3 —
-   `backend.tf` sets `encrypt = true` with no `kms_key_id`), no DynamoDB write (`-lock=false`).
+1. **AWS** — ✅ written as code in **`glunk-works/global-bootstrap` PR #1** (`plan_roles.tf`);
+   owner action is to review and `tofu apply` it, then read the ARN from the new
+   `github_actions_plan_role_arns` output. **The OIDC roles are managed in
+   `global-bootstrap`, not bootstrapped by hand** — its per-project role trusts
+   `sub = repo:<org>/<repo>:ref:refs/heads/main`, which is exactly why PR runs 403.
+   The new role is read-only, `:pull_request`-scoped, state-prefix-limited, and carries an
+   explicit `Deny` on the findings bucket.
 2. **Infisical** — second machine identity, subject allowlist exactly
    `repo:glunk-works/bounty-infra:pull_request`, read access at `/bounty-infra` (`prod`) to
    `AWS_REGION`, `TF_STATE_BUCKET`, `TF_STATE_LOCK_TABLE`, `FINDINGS_BUCKET_NAME`,
