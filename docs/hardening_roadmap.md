@@ -59,7 +59,9 @@ the wrapper (loop-orchestrator S47-D12; comments on #7/#13).
 |---|---|---|
 | **S0 — Governance & CI/CD hardening** | #6, #8, #9, #10 | Branch-protection ruleset + minimal working method; gated OpenTofu deploy (plan-on-PR + apply-on-merge, `production` Environment approval); non-bypassable CI on all paths; `run-scan.yml` injection fix + drop unused `GITHUB_TOKEN`. **Also unblocks loop-orchestrator S47's #18** (same file as #6). |
 | **S1 — Scanner security core** | #7, #13 | The scanner's **own** structural scope check (RoE allowlist before any subprocess) and triage-prompt hardening (delimit/neutralize target-derived fields; triage advisory-only). The wrap+harden core. Its own planning pass at its boundary. |
-| **S2 — Scanner robustness** | #11, #12, #14 | Tighten task-role IAM to what's used; pin tools/templates/deps (reproducible builds); distinguish partial/failed scans from clean success. |
+| **S2 — Scanner robustness** | #11, #12, #14 | Tighten task-role IAM to what's used; pin tools/templates/deps (reproducible builds); distinguish partial/failed scans from clean success. **#11 is re-scoped by BI-D5** — the Fargate task role it targets is being retired; re-point at the replacement credential path. |
+| **SG — CI gate expansion** | new | Adopt the four shared gates (`secrets-scan`/gitleaks, `dependency-audit`, `sbom`, `pr-title`) + **`zizmor`** (workflow security — detects the template-injection class that was #6, converting T4's fix from done-once into can't-regress) + container image scan (trivy/grype) + IaC security scan (checkov/trivy-config; `tflint` lints, it does not scan). |
+| **SE — Egress migration (BI-D5)** | new | Retire ECS/VPC/ECR from `infra/**`; per-scan ephemeral VM on Vultr with a reserved IP; re-point `run-scan.yml` at the new launcher; credential path for S3 write; provider abuse-team notification. |
 
 **#6 severity is anticipatory, not live (qualifier added 2026-07-21).** `workflow_dispatch`
 requires repo **write** access and there is a single collaborator, so #6 is not currently an
@@ -72,6 +74,14 @@ this as "a live RCE-with-AWS-creds surface" — overstated on current facts; ame
 
 Method (skills, an IaC/AWS/Actions `security-critic` agent, the fresh-session
 `architect-review` CI gate) layers across S0–S2 — not a dedicated sprint (MG1).
+
+**Ordering after S0 (BI-D5 changes this).** **SG splits along substrate dependence.** Five of
+its seven gates — `secrets-scan`, `dependency-audit`, `sbom`, `pr-title`, `zizmor` — touch
+neither `infra/**` nor the runtime, so they can land **immediately and in parallel** with
+anything else. The remaining two should follow **SE**: an IaC security scan run now would spend
+its findings on ECS/VPC resources BI-D5 deletes, and the image scan wants to target whatever
+registry SE settles on. **SE before S2**, since S2's #11 targets a role SE retires. **S1 is
+independent of both** and can be sequenced on its own merits.
 
 ## The central conventions repo (BI-D3)
 
@@ -91,26 +101,74 @@ shared-code package:
   loop-orchestrator's `conventions.md` as the interim source and points at the central repo
   once it exists.
 
-## OPEN — compute-model architecture decision (raised 2026-07-21; needs its own pass)
+## RESOLVED — compute-model architecture decision (pass held 2026-07-21; see BI-D5)
 
-The **described** architecture (loop-orchestrator `docs/bounty_loop_architecture.md` / older
-framing) is *dynamically provisioned Ubuntu compute nodes bootstrapped with Nuclei/Amass/ffuf*
-— a VM model that would be **Ansible-provisioned**. The **actual** implementation is **AWS
-Fargate** with `subfinder`/`httpx`/`nuclei` **baked into the Docker image** (`src/Dockerfile`,
-multi-stage Go builder) — **no Ansible, no VM, a different toolset**. This is a real
-mismatch, and "missing Ansible" is a symptom of an unmade decision:
-- **Option A — stay Fargate/Docker** (current reality): no Ansible; tool provisioning is the
-  Dockerfile. Reconcile the docs to match. Simplest; keeps the zero-ingress serverless model.
-- **Option B — move to Ansible-provisioned VM nodes** (the described model): adds Ansible
-  playbooks for node bootstrap, EC2/ASG infra, Amass/ffuf. A large re-architecture.
-- **Option C — hybrid:** Fargate for batch recon, Ansible-provisioned nodes for a class of
-  deep/long scans.
+**Outcome: scan egress leaves AWS. AWS keeps the control plane.** The scanner runs as an
+**ephemeral VM provisioned per scan** on **Vultr** (DigitalOcean as documented fallback),
+booted from the existing Docker image, writing to the same S3 findings bucket. Full statement
+and rejected alternatives: **BI-D5** below.
 
-**Do not resolve in passing** — it changes the compute topology, the IAM model, and the S3
-output path all three sprints assume. Needs a dedicated architecture pass before it can be
-sequenced. **Captured here so it is not lost.** (Also note a docs-drift symptom: the README
-lists workflows `build-and-push.yml` that don't exist and claims "least privilege IAM" that
-#11 contradicts — fold into S2 / a docs pass.)
+### The question was mis-framed as Fargate-vs-Ansible
+
+The original framing (Option A stay Fargate / Option B Ansible VMs / Option C hybrid) treated
+this as a **compute** decision. It is not. Compute was never the problem:
+`subfinder`/`httpx`/`nuclei` are pure userspace TCP, 1 vCPU / 2 GB is adequate, and Fargate at
+~$0.05/hr makes a 30-minute scan cost ~2.5¢ — **cheaper** than an always-on VPS at this run
+frequency. The binding constraints are **network identity** and **blast radius**.
+
+### The three findings that decided it
+
+1. **AWS's penetration-testing policy does not cover this workload.** It scopes authorization
+   to *"security controls amongst **your AWS assets**"* — third-party bounty targets fall
+   entirely outside it, with no researcher carve-out. Scan traffic has never been authorized
+   under that policy. <https://aws.amazon.com/security/penetration-testing/>
+2. **The egress IP rotates and is unregistrable.** `infra/main.tf` sets
+   `map_public_ip_on_launch = true` with no NAT/EIP, so every task presents a different
+   AWS-owned address. Two consequences: bounty programs requiring source-IP registration or
+   deconfliction cannot be satisfied, and AWS ranges are broadly WAF/CDN-blocked — which
+   produces **silent false negatives**, the worst possible failure mode for a pipeline whose
+   entire output is "what did we find."
+3. **Fargate cannot be fixed in place.** `linuxParameters.capabilities.add` accepts **only
+   `SYS_PTRACE`** on Fargate — `NET_ADMIN` and `NET_RAW` are unavailable. This rules out
+   SYN-scanning tools permanently, **and** rules out the obvious workaround of tunnelling
+   egress through WireGuard for a stable IP (needs `NET_ADMIN` + `/dev/net/tun`). Not awkward
+   — structurally impossible.
+   <https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_LinuxParameters.html>
+
+**Blast radius is what makes (1) urgent rather than academic.** The AWS account also holds the
+OpenTofu state bucket, the findings bucket, and **every GitHub OIDC role for all `glunk-works`
+projects** (`global-bootstrap` generates them from `var.projects`). An abuse suspension takes
+out the shared foundation, not just this project.
+
+### Provider selection is not a commodity swap
+
+"Use a smaller provider, they're more permissive" is **false as a generalization** — several
+budget hosts are markedly *less* tolerant than AWS. The real variable is whether the AUP
+prohibits **unauthorized** scanning or **all** scanning. Verified by reading the text:
+
+| Provider | Language | Verdict |
+|---|---|---|
+| **Vultr** | port scanning permitted *"if explicitly authorized by the destination host and/or network"* | **Chosen** — affirmative permission, conditioned on exactly what a program's RoE grants |
+| DigitalOcean | prohibits probing *"without permission"*; silent on authorized third-party testing | Documented fallback — absence of prohibition, not presence of permission |
+| AWS | authorization scoped to *"your AWS assets"* | Affirmatively excludes this use case |
+| **Hetzner** | prohibits port scanning **and** *"scanning of foreign networks or foreign IP addresses"* | **Disqualified** — the default cheap-VPS pick explicitly bans the reason we would move |
+
+**AUP text and abuse-desk behaviour are separate risks.** Contractual permission does not stop
+an automated complaint from suspending a box; it only means the appeal is winnable. Hence the
+procedural controls in BI-D5.
+
+### Consequences for the existing sprints
+
+- **S2's #11 (tighten task-role IAM) largely evaporates** — `aws_iam_role.task_role` and
+  `execution_role` are Fargate constructs BI-D5 retires. Re-scope #11 to the *replacement*
+  credential path (short-lived S3-write creds delivered to the VM) when S3 lands.
+- **S1 is unaffected.** #7 (scope enforcement) and #13 (prompt injection) are scanner-internal
+  and provider-agnostic — they survive the substrate change intact.
+- **T3(d)'s image-rollout mechanism is replaced, its principle is not.** Sha-pinned, CI-gated,
+  never `:latest` carries over to whatever registry the VM pulls from.
+
+*(Docs-drift symptom still outstanding: the README lists a `build-and-push.yml` that does not
+exist and claims "least privilege IAM" that #11 contradicts — fold into a docs pass.)*
 
 ## Locked decisions (this planning pass, 2026-07-21, owner-confirmed via micro-gates)
 
@@ -133,6 +191,34 @@ lists workflows `build-and-push.yml` that don't exist and claims "least privileg
   summarized only. (Rejected: making the repo private — it is deliberate portfolio material;
   a **private mirror repo** for the sensitive elements — every candidate has a better home than
   git, and a mirror adds split history + sync burden.)
+- **BI-D5 (2026-07-21) — compute model: scan egress leaves AWS; AWS keeps the control plane.**
+  (§ *RESOLVED — compute-model architecture decision* above.) The scanner runs as an
+  **ephemeral VM provisioned per scan** on **Vultr** (DigitalOcean documented fallback), booted
+  from the existing Docker image, destroyed after the run. **AWS retains** the S3 findings
+  bucket + KMS key, the OpenTofu state backend, and the GitHub OIDC roles — none of which carry
+  abuse risk, and all of which S0 already hardened. **AWS loses** the ECS cluster, task
+  definition, ECR repo, VPC/subnet/SG/IGW, and both Fargate IAM roles.
+  - **Ephemerality is the virtue worth keeping, not AWS.** A persistent VPS was rejected
+    precisely because it regresses the zero-ingress principle (`infra/main.tf` § *NETWORK
+    (Zero-Trust Ingress)*): it needs SSH ingress, patching, and turns cattle into a pet.
+    Cloud-init plus the existing image gives the cattle-shaped version.
+  - **A reserved/floating IP attaches at boot**, so a registrable, stable source identity and
+    per-scan ephemerality are **not** in tension.
+  - **The scanner image needs no changes.** `scanner.py` already uses boto3's default
+    credential chain and takes everything else via argv — the provider coupling really is only
+    the launcher and the credential path. That is the evidence the seam is drawn correctly.
+  - **Required procedural controls** (AUP permission ≠ abuse-desk immunity): reserved IP
+    registered with each program; proactive notification to the provider's abuse team with
+    scope; RoE/authorization documentation kept retrievable.
+  - **Rejected:** *Option A, stay Fargate* — AWS's pentest policy affirmatively excludes
+    third-party targets, and the rotating IP causes silent false negatives. *Option B, Ansible
+    VM nodes* — right instinct (leave Fargate), wrong shape: Ansible provisions pets, and the
+    described Amass/ffuf toolset is a separate question from where egress originates.
+    *Fargate + NAT/EIP* — fixes the IP, fixes neither the AUP posture nor blast radius.
+    *Dedicated scanning AWS account* — fixes blast radius only, knowingly operating outside
+    AWS's policy. *Fargate + userspace proxy on a VPS* — viable and minimal, but per-tool proxy
+    config with AWS-side DNS is a weaker guarantee than moving the host; only worth it under
+    time pressure, and the pipeline is pre-production.
 
 ## Cross-repo coupling
 

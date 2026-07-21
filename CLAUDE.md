@@ -17,10 +17,14 @@ Zero ingress; every account-specific value resolves at runtime through Infisical
 
 > **This repo is under active hardening — read the roadmap before extending it.**
 > [`docs/hardening_roadmap.md`](docs/hardening_roadmap.md) is the reference of record:
-> the sprint sequence (S0 governance → S1 scanner security → S2 robustness), the locked
-> decisions (**BI-D1..BI-D4**), and the **OPEN compute-model question** (the docs describe
-> Ansible-provisioned VM nodes; the implementation is Fargate + Docker — unresolved, do
-> not settle it in passing). Findings #6–#14 from the 2026-07-19 review are open issues.
+> the sprint sequence (S0 governance → S1 scanner security → S2 robustness, plus **SG** CI
+> gates and **SE** egress migration), and the locked decisions (**BI-D1..BI-D5**).
+> Findings #6–#14 from the 2026-07-19 review are open issues, as is **#32**.
+>
+> **The compute-model question is RESOLVED as of 2026-07-21 (BI-D5):** scan egress leaves
+> AWS for per-scan ephemeral VMs on Vultr; AWS keeps the control plane (S3 findings + KMS,
+> tofu state, OIDC roles). The ECS/Fargate + VPC half of `infra/` is slated for retirement,
+> so **do not extend it** — read BI-D5 before touching `infra/main.tf`.
 
 ## Conventions: shared source + local extension (BI-D3)
 

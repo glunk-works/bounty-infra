@@ -6,10 +6,27 @@ Regenerate this at the end of every working session.
 
 ## Now
 
-**S0 — Governance & CI/CD hardening: ALL FOUR TASKS DONE.** S0 is closed (#6, #8, #9, #10 all
-remediated and behaviorally verified). Next model **Opus/architect** — S1 (scanner security
-core, #7/#13) needs its own planning pass at the scanner's boundary before any Sonnet
-implementation starts; see `docs/hardening_roadmap.md`'s sprint sequence.
+**S0 closed** (#6, #8, #9, #10 all remediated and behaviorally verified). **The compute-model
+architecture pass is also done — BI-D5 is locked** (2026-07-21): scan egress leaves AWS for
+per-scan ephemeral VMs on **Vultr**; AWS keeps the control plane. See
+`docs/hardening_roadmap.md` § *RESOLVED — compute-model architecture decision*.
+
+**Next action — pick one of two, they are independent:**
+
+1. **SG-partial, the substrate-independent gates** — `secrets-scan` (gitleaks),
+   `dependency-audit`, `sbom`, `pr-title`, `zizmor`. Model **Sonnet**: the shapes are already
+   specified (port loop-orchestrator's `ci.yml` jobs) and nothing here is an architecture call.
+   Needs a `.gitleaks.toml` and two new hatch envs (`audit`, `sbom`) in `src/pyproject.toml`,
+   neither of which exists yet. **Land these before SE** — they touch neither `infra/**` nor the
+   runtime, so the migration cannot invalidate them.
+2. **SE — the egress migration itself.** Model **Opus** for the task-level plan (credential
+   delivery to an ephemeral VM is a real design question), then Sonnet to implement.
+
+**S1** (#7/#13, plus new **#32**) still needs its own Opus planning pass at the scanner's
+boundary, and is independent of both of the above.
+
+**Do not start the IaC security scan or the container image scan yet** — both are SG gates that
+should follow SE (see the ordering note in the roadmap's sprint sequence).
 
 | Task | State |
 |---|---|
@@ -176,6 +193,34 @@ workflow changes in a PR take effect for `pull_request` runs — re-opening #9 s
 - **#6 blocks loop-orchestrator #18 — now unblocked.** Its `seed`/`token` dispatch inputs can
   ride this same safe `env:` + `jq --arg` pattern.
 
+## Just done (2026-07-21) — the compute-model architecture pass (BI-D5)
+
+The roadmap's OPEN compute question is **resolved**. Full record in
+`docs/hardening_roadmap.md`; the short version and what surprised us:
+
+- **The Fargate-vs-Ansible framing was wrong.** Compute was never the constraint — the toolset
+  is pure userspace TCP, and Fargate at ~2.5¢ per 30-minute scan is *cheaper* than an always-on
+  VPS. The real constraints are **network identity** (rotating, unregistrable AWS egress IP,
+  causing silent WAF false negatives) and **blast radius** (an abuse suspension hits the account
+  holding every `glunk-works` OIDC role).
+- **Two claims were verified against primary sources rather than assumed**, and both turned out
+  decisive: AWS's pentest policy scopes authorization to *"your AWS assets"* (third-party
+  targets excluded, no researcher carve-out), and Fargate's
+  `linuxParameters.capabilities.add` accepts **only `SYS_PTRACE`** — so the tempting
+  "keep Fargate, tunnel egress through WireGuard for a stable IP" fix is structurally
+  impossible, not merely awkward.
+- **"Smaller provider = more permissive" is false**, and checking saved us from a real mistake:
+  **Hetzner explicitly prohibits scanning foreign networks/IPs** and is the default cheap-VPS
+  recommendation. Vultr won on AUP text — it *affirmatively permits* scanning "if explicitly
+  authorized by the destination host and/or network", which is exactly what a program's RoE
+  grants. DigitalOcean is the fallback (silent, not permissive).
+- **New issue #32** — the scanner has no identifying User-Agent and no rate limiting on
+  `httpx`/`nuclei`. Provider-independent, survives the migration, and belongs in S1 alongside
+  #7/#13. Surfaced only because the AUP research forced the question "what actually stops an
+  abuse complaint being filed."
+- **Sprint sequence gained SG (CI gate expansion) and SE (egress migration)**, and **S2's #11
+  is re-scoped** — it targets a Fargate task role BI-D5 retires.
+
 ## Gotchas worth remembering
 
 - **Never require a status check that does not exist yet** — it strands every open PR.
@@ -231,6 +276,16 @@ workflow changes in a PR take effect for `pull_request` runs — re-opening #9 s
   And before trusting this file's own "Now" section, or deleting any merged branch, run
   `git log origin/<branch> --not origin/main` to make sure nothing on it is still stranded.
 - Never commit to `main`, never merge your own PR, never force-push a pushed branch.
+- **Read a hosting provider's AUP text before assuming it tolerates scanning — provider size
+  is not the variable.** Hetzner, the default cheap-VPS recommendation, explicitly prohibits
+  "scanning of foreign networks or foreign IP addresses." The distinction that matters is
+  whether the AUP bans *unauthorized* scanning (fine — a program's RoE is the authorization) or
+  *all* scanning (disqualifying). And AUP permission is not abuse-desk immunity: it makes an
+  appeal winnable, it does not stop an automated complaint from killing the box. That is why
+  #32 (attribution + rate limiting) matters more than the provider choice.
+- **Fargate grants only `SYS_PTRACE`** via `linuxParameters.capabilities.add` — no `NET_ADMIN`,
+  no `NET_RAW`. Rules out SYN-scanning tools *and* any tun-device VPN/tunnel inside a task. If a
+  future design depends on network-layer control of egress, Fargate cannot host it at all.
 - **ECS `containerOverrides.command` replaces Docker `CMD`, never `ENTRYPOINT`.** If the
   image's `ENTRYPOINT` already invokes the interpreter/module (`src/Dockerfile`:
   `["python", "-m", "bounty_scanner.scanner"]`), the override `command` array must carry
@@ -256,12 +311,8 @@ workflow changes in a PR take effect for `pull_request` runs — re-opening #9 s
 
 ## OPEN — not scheduled anywhere
 
-- **The four unadopted shared gates.** loop-orchestrator requires `secrets-scan`,
-  `dependency-audit`, `sbom`, `pr-title`; this repo has none, and no sprint schedules them.
-  `secrets-scan` has the strongest same-sprint argument given the repo is public.
-- **The compute-model decision** (Fargate/Docker as-built vs the Ansible-provisioned VM
-  model the docs describe). Needs its own architecture pass — it moves the IAM model and
-  the S3 output path all three sprints assume.
+- ~~The four unadopted shared gates~~ and ~~the compute-model decision~~ — **both now
+  scheduled**: SG and SE respectively in the roadmap's sprint sequence (2026-07-21).
 - **The central conventions repo (BI-D3).** `CLAUDE.md` points at loop-orchestrator's
   `conventions.md` as the interim source; re-point once the central repo exists.
 - **Infisical has no IaC.** Both machine identities are hand-configured and invisible to
@@ -282,7 +333,10 @@ workflow changes in a PR take effect for `pull_request` runs — re-opening #9 s
 - [`sprints/S0_governance_hardening/sprint_plan.md`](../sprints/S0_governance_hardening/sprint_plan.md)
   — the S0 plan (T1–T4, acceptance criteria, risks).
 - Issues **#6–#14** (2026-07-19 review), **#18** (recon dispatch contract, cross-repo),
-  **#19** (adopt the working method — this sprint).
+  **#19** (adopt the working method — this sprint), **#32** (scanner traffic attribution +
+  rate limiting — S1, filed from the BI-D5 pass).
+- **BI-D5** (compute model) — `docs/hardening_roadmap.md` § *RESOLVED — compute-model
+  architecture decision* + the locked-decisions list.
 - PRs **#29** (T4 injection fix + token drop), **#30** (duplicate-entrypoint fix, found via
   #29's behavioral verification); `glunk-works/global-bootstrap` **PR #2**
   (`ecs:DescribeTasks`/`StopTask` grant, applied 2026-07-21).
