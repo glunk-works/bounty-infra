@@ -7,6 +7,15 @@ name: "1a. Plan Infrastructure"
 # deadlocks: a PR touching only `docs/` never triggers the workflow, so the required
 # check sits pending forever and the PR can never merge. The job therefore runs on
 # every PR and decides internally whether there is anything to plan.
+#
+# READ-ONLY CREDENTIALS, deliberately distinct from the apply path. A plan is a
+# read operation and a PR is unreviewed code, so this job must never hold the
+# apply role. It uses its own Infisical identity (`vars.PLAN_IDENTITY_ID`, scoped to
+# the `repo:glunk-works/bounty-infra:pull_request` OIDC subject) and its own AWS role
+# (`AWS_PLAN_ROLE_ARN`, read-only). `deploy-infra.yml` keeps `AWS_OIDC_ROLE_ARN`,
+# whose Infisical identity must stay scoped to the `main` ref subject — do NOT
+# broaden it to `pull_request`, or opening a PR silently grants apply-capable
+# credentials with no approval, re-opening #9 through the side door.
 
 on:
   pull_request:
@@ -52,7 +61,7 @@ jobs:
         uses: Infisical/secrets-action@v1.0.16
         with:
           method: "oidc"
-          identity-id: ${{ vars.IDENTITY_ID }}
+          identity-id: ${{ vars.PLAN_IDENTITY_ID }}
           oidc-audience: ${{ github.server_url }}/${{ github.repository }}
           env-slug: "prod"
           project-slug: "pipeline-secret-store"
@@ -62,7 +71,8 @@ jobs:
         if: steps.changes.outputs.infra == 'true'
         uses: aws-actions/configure-aws-credentials@v6
         with:
-          role-to-assume: ${{ env.AWS_OIDC_ROLE_ARN }}
+          # Read-only role — NOT the apply role. See the header note.
+          role-to-assume: ${{ env.AWS_PLAN_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Setup OpenTofu Core

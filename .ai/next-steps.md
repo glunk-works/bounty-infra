@@ -13,7 +13,7 @@ task in `sprints/S0_governance_hardening/sprint_plan.md`).
 | Task | State |
 |---|---|
 | **T1** branch protection + method scaffold | ruleset ✅ · scaffold ✅ (#24) · required-checks list ⬜ (deferred to end of S0) |
-| **T2** gated OpenTofu deploy (#9) | ✅ this PR — verify the live `tofu-plan` run on it before merging |
+| **T2** gated OpenTofu deploy (#9) | ⚠️ code complete (this PR) — **BLOCKED on owner-side credential setup**, see below |
 | **T3** non-bypassable CI (#8) | ⬜ not started |
 | **T4** `run-scan.yml` injection fix (#6) + drop unused token (#10) | ⬜ not started |
 
@@ -35,6 +35,28 @@ task in `sprints/S0_governance_hardening/sprint_plan.md`).
   Environment is live: required reviewer `Seuss27`, `prevent_self_review: false`,
   deployments restricted to `main`. Four deviations from the plan as written are recorded
   in the sprint plan's T2 entry — read them before touching either workflow.
+
+## BLOCKED — T2 needs a read-only plan identity (owner action, outside this repo)
+
+The first live `tofu-plan` run failed `403 Access denied: OIDC subject not allowed`. On
+`push` the OIDC subject is `repo:glunk-works/bounty-infra:ref:refs/heads/main`; on
+`pull_request` it is `repo:glunk-works/bounty-infra:pull_request`. **Do not fix this by
+adding `pull_request` to the existing identity** — workflow changes in a PR take effect
+for `pull_request` runs, so that would make merely *opening* a PR grant apply-capable AWS
+credentials with no approval, re-opening #9 through the side door. Owner decided
+2026-07-21: a separate read-only identity. Setup, in order:
+
+1. **AWS** — read-only role, trust conditioned on `sub = repo:glunk-works/bounty-infra:pull_request`,
+   `aud = sts.amazonaws.com`; attach `ReadOnlyAccess`. No KMS grant (state is SSE-S3 —
+   `backend.tf` sets `encrypt = true` with no `kms_key_id`), no DynamoDB write (`-lock=false`).
+2. **Infisical** — second machine identity, subject allowlist exactly
+   `repo:glunk-works/bounty-infra:pull_request`, read access at `/bounty-infra` (`prod`) to
+   `AWS_REGION`, `TF_STATE_BUCKET`, `TF_STATE_LOCK_TABLE`, `FINDINGS_BUCKET_NAME`,
+   `KMS_KEY_ARN`, plus a **new** `AWS_PLAN_ROLE_ARN`. It must **not** read `AWS_OIDC_ROLE_ARN`.
+3. **GitHub** — repo variable `PLAN_IDENTITY_ID` = the new identity's id.
+
+`plan-infra.yml` is already written against this contract. Once it exists, re-run the
+`tofu-plan` check on the T2 PR and confirm a **no-op plan** before merging.
 
 ## Next — T3, non-bypassable CI (#8)
 
