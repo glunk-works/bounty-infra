@@ -13,6 +13,13 @@ name: "Continuous Integration"
 on:
   pull_request:
 
+# SG: narrowest workflow-wide default (CLAUDE.md § *Local: GitHub Actions security*).
+# Every job below only reads the repo — none calls the GitHub API, pushes, or
+# comments — so `contents: read` is the whole requirement, and setting it here means
+# a job added later starts locked-down rather than inheriting the permissive default.
+permissions:
+  contents: read
+
 jobs:
   lint:
     runs-on: ubuntu-latest
@@ -82,3 +89,41 @@ jobs:
           tflint_version: v0.64.0
       - name: tflint
         run: tflint --recursive
+
+  # SG: CVE audit of the scanner's dependency closure. Runs unchained and in
+  # parallel with lint/test — no `needs:`, because a required check should report
+  # its own conclusion as fast as it can rather than inherit an upstream failure,
+  # and nothing here depends on lint or test having passed.
+  dependency-audit:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./src
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install hatch
+      - name: pip-audit
+        run: hatch run audit:run
+
+  # SG: CycloneDX SBOM. The artifact is deliberately safe to publish on a public
+  # repo — it enumerates this project's own third-party Python dependencies, which
+  # are already public in `pyproject.toml`. It carries none of BI-D4's restricted
+  # classes: no account identifiers, no findings, no scope/RoE data.
+  sbom:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./src
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install hatch
+      - name: Generate SBOM
+        run: hatch run sbom:run
+      - uses: actions/upload-artifact@v7
+        with:
+          name: sbom
+          path: src/sbom.json
