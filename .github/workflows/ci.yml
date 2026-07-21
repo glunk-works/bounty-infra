@@ -27,8 +27,10 @@ jobs:
       run:
         working-directory: ./src
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with: { python-version: "3.11" }
       - run: pip install hatch
       - name: Ruff + bandit
@@ -40,8 +42,10 @@ jobs:
       run:
         working-directory: ./src
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with: { python-version: "3.11" }
       - run: pip install hatch
       - name: Pytest
@@ -54,8 +58,10 @@ jobs:
       run:
         working-directory: ./src
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with: { python-version: "3.14" }
       - run: pip install hatch
       - name: Hatch Build Wheel
@@ -74,8 +80,10 @@ jobs:
       run:
         working-directory: ./infra
     steps:
-      - uses: actions/checkout@v7
-      - uses: opentofu/setup-opentofu@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
       - name: tofu fmt
         run: tofu fmt -check -recursive
       - name: tofu validate
@@ -84,7 +92,7 @@ jobs:
           tofu init -backend=false
           tofu validate
       - name: Setup tflint
-        uses: terraform-linters/setup-tflint@v6
+        uses: terraform-linters/setup-tflint@6e1e0642c0289bd619021bf6b34e3c08ed1e005a # v6.3.0
         with:
           tflint_version: v0.64.0
       - name: tflint
@@ -100,8 +108,10 @@ jobs:
       run:
         working-directory: ./src
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with: { python-version: "3.11" }
       - run: pip install hatch
       - name: pip-audit
@@ -117,13 +127,41 @@ jobs:
       run:
         working-directory: ./src
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with: { python-version: "3.11" }
       - run: pip install hatch
       - name: Generate SBOM
         run: hatch run sbom:run
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: sbom
           path: src/sbom.json
+
+  # SG: workflow security scanner. Catches the injection class that was #6/T4 and
+  # the artipacked/unpinned-uses classes fixed alongside it in this same change —
+  # this is what turns "fixed once" into "can't regress." Runs unchained, like the
+  # other SG additions.
+  #
+  # `security-events: write` is job-scoped, not added to the workflow-wide
+  # `permissions:` block above — it is the one job here that needs it (to upload
+  # SARIF to the Security tab; public repos get GitHub Advanced Security free),
+  # every other job stays at the workflow default of `contents: read`.
+  #
+  # zizmor-action always propagates zizmor's own exit code (verified by reading
+  # its action.sh, not assumed from its README): a High-confidence finding fails
+  # this job the same way a failing test fails `test`. The SARIF upload is an
+  # additional convenience, not a substitute for that.
+  zizmor:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Run zizmor
+        uses: zizmorcore/zizmor-action@6599ee8b7a49aef6a770f63d261d214911a7ce02 # v0.6.0

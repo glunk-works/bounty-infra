@@ -11,14 +11,17 @@ architecture pass is also done — BI-D5 is locked** (2026-07-21): scan egress l
 per-scan ephemeral VMs on **Vultr**; AWS keeps the control plane. See
 `docs/hardening_roadmap.md` § *RESOLVED — compute-model architecture decision*.
 
+**SG-partial done in two PRs** (2026-07-21): `dependency-audit`, `sbom`, `pr-title` (#34,
+merged) then `zizmor` + full action pinning + `persist-credentials: false` (this PR — see
+below). **Only `secrets-scan` is left in SG-partial**, blocked on `GITLEAKS_LICENSE` at org
+level (gitleaks-action requires a licence for organization accounts regardless of repo
+visibility; bounty-infra has no repo secrets today, loop-orchestrator has it as a repo
+secret). Owner will add it org-wide next time at the keyboard.
+
 **Next action — pick one of two, they are independent:**
 
-1. **SG-partial, the substrate-independent gates** — `secrets-scan` (gitleaks),
-   `dependency-audit`, `sbom`, `pr-title`, `zizmor`. Model **Sonnet**: the shapes are already
-   specified (port loop-orchestrator's `ci.yml` jobs) and nothing here is an architecture call.
-   Needs a `.gitleaks.toml` and two new hatch envs (`audit`, `sbom`) in `src/pyproject.toml`,
-   neither of which exists yet. **Land these before SE** — they touch neither `infra/**` nor the
-   runtime, so the migration cannot invalidate them.
+1. **Finish SG** — add `secrets-scan` once `GITLEAKS_LICENSE` exists at org level (mirror
+   loop-orchestrator's job). Model **Sonnet**.
 2. **SE — the egress migration itself.** Model **Opus** for the task-level plan (credential
    delivery to an ephemeral VM is a real design question), then Sonnet to implement.
 
@@ -27,6 +30,12 @@ boundary, and is independent of both of the above.
 
 **Do not start the IaC security scan or the container image scan yet** — both are SG gates that
 should follow SE (see the ordering note in the roadmap's sprint sequence).
+
+**Once this PR's checks report green, add `zizmor` to the required-checks list** on the
+`protected-integration-branches` ruleset (same discipline as every other required check:
+never require one that hasn't reported yet) — and update `ruleset-drift.yml`'s taxonomy
+(`lint`, `test`, `tofu-validate`, `tofu-plan`) to include it in the same change, or the drift
+guard will flag itself as out of sync with what it's supposed to watch.
 
 | Task | State |
 |---|---|
@@ -220,6 +229,45 @@ The roadmap's OPEN compute question is **resolved**. Full record in
   abuse complaint being filed."
 - **Sprint sequence gained SG (CI gate expansion) and SE (egress migration)**, and **S2's #11
   is re-scoped** — it targets a Fargate task role BI-D5 retires.
+
+## Just done (2026-07-21) — zizmor gate + full action pinning, ci/zizmor-and-pinning
+
+Ran zizmor locally against `main` (post-#34) before touching anything: **46 findings** — 33
+`unpinned-uses`, 10 `artipacked`, 3 `template-injection`. All resolved; local re-run is now
+**0 findings, exit 0**, at the same `--persona=regular` the new CI job uses.
+
+- **Every third-party action across all 6 workflows pinned to a commit SHA** (10 unique
+  actions), each resolved via the GitHub API rather than guessed and cross-checked where
+  possible: `actions/setup-python` and `actions/upload-artifact` resolved to the exact same
+  SHAs loop-orchestrator already pins, which is real corroboration of the method, not
+  coincidence.
+- **Two actions (`aws-actions/configure-aws-credentials@v6`, `terraform-linters/setup-tflint@v6`)
+  had `v6` as an *annotated tag object*, not a lightweight tag pointing straight at a
+  commit** — the naive `git/ref/tags/<tag>` lookup returns the **tag object's own SHA**, which
+  is not a valid commit to pin `uses:` against. Had to dereference
+  (`git/tags/<tag-object-sha>` → `.object.sha`) to get the real commit. Worth checking
+  `.object.type` explicitly for every action pinned this way in future — the failure mode
+  (pinning to a tag-object SHA) would likely just break the workflow outright, so it's a
+  loud failure rather than a silent one, but still wasted a CI run to discover.
+- **`persist-credentials: false` added to all 10 `actions/checkout` steps** across every
+  workflow.
+- **Found and fixed a live `CLAUDE.md` violation T4 missed**: `build-image.yml`'s "Fetch ECR
+  URL from State" step inlined `${{ env.TF_STATE_BUCKET }}` etc. directly into a `run:`
+  block — the exact #6 pattern — while the near-identical steps in `deploy-infra.yml`,
+  `plan-infra.yml`, and `run-scan.yml` already used the correct plain-shell-variable form.
+  T4 only touched `run-scan.yml`, so this sibling was never in scope. Confirmed via
+  Infisical's docs that `export-type: "env"` (the default, unoverridden anywhere here)
+  really does inject secrets as process env vars before assuming the fix would work at
+  runtime.
+- **New `zizmor` job in `ci.yml`**, using `zizmorcore/zizmor-action` (pinned SHA, v0.6.0).
+  Job-scoped `security-events: write` (not workflow-wide) so SARIF can upload to the
+  Security tab — free on this public repo under GitHub Advanced Security. Verified by
+  reading the action's actual `action.sh` (not trusting a fetched summary of its README,
+  which claimed advanced-security mode "will not fail the build on findings" — **false**:
+  the script does `exit "${exitcode}"` unconditionally, so a zizmor finding at or above the
+  default threshold fails the job exactly like a failing test does).
+- **Not yet a required check** — same discipline as every other gate in this repo: it has to
+  report green on a real PR here first.
 
 ## Gotchas worth remembering
 
