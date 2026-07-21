@@ -136,6 +136,12 @@ override to a gated job — it renames the check run and silently un-requires th
 - **`docs/hardening_roadmap.md`** — reference of record: posture, BI-D1..D4, sprint
   sequence, public-repo rules, the OPEN compute-model decision, cross-repo coupling.
 - **`sprints/S0_governance_hardening/sprint_plan.md`** — the detailed S0 plan (T1–T4).
+- **`glunk-works/global-bootstrap`** — owns this repo's AWS foundation: the OpenTofu state
+  bucket + lock table, the findings bucket + KMS key, and **every GitHub OIDC role**
+  (generated per project from `var.projects`). `AWS_OIDC_ROLE_ARN` and `AWS_PLAN_ROLE_ARN`
+  resolve to roles defined *there*, not in `infra/`. Any change to what CI may do in AWS is
+  a change to that repo — and its trust conditions are subject-scoped, so a **new workflow
+  trigger generally needs a new role**, not a widened one.
 - **loop-orchestrator** — the reference implementation for the working method. Read its
   equivalent (`CLAUDE.md`, `.ai/context/`, `ci.yml`, `ruleset-drift.yml`) **before**
   designing any governance or CI pattern here, so the two repos stay diffable.
