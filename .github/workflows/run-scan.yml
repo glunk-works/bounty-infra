@@ -100,8 +100,12 @@ jobs:
               containerOverrides: [
                 {
                   name: "scanner-container",
+                  # No "python -m bounty_scanner.scanner" prefix here: ECS
+                  # containerOverrides.command replaces Docker CMD only, and
+                  # the image ENTRYPOINT (src/Dockerfile) already supplies
+                  # that prefix. Repeating it here duplicates the module
+                  # invocation in the final argv, which argparse rejects.
                   command: [
-                    "python", "-m", "bounty_scanner.scanner",
                     $domain,
                     "--severities", $severities,
                     "--timeout", $timeout,
