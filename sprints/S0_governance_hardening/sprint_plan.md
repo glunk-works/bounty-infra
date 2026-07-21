@@ -5,11 +5,11 @@
 **Out of scope:**
 - **Scanner code (#7 scope, #13 triage).** No `scanner.py` change — S1. S0 is `.github/` + `infra/` CI/CD + repo governance only.
 - **Robustness (#11 IAM, #12 pinning, #14 partial-success).** S2.
-- **The central shared repo (BI-D3) and the compute-model / Ansible decision.** Both are their own passes (see the roadmap). S0's `CLAUDE.md` references loop-orchestrator's `conventions.md` as the **interim** convention source and notes the eventual central-repo migration.
+- **Standing up the central conventions repo (BI-D3) and the compute-model / Ansible decision.** Both are their own passes (see the roadmap). S0's `CLAUDE.md` references loop-orchestrator's `conventions.md` as the **interim** convention source + adds a local bounty-infra section, and re-points at the central repo once it exists. (BI-D3 is docs/conventions only — no shared-code package.)
 - **The full method (skills, IaC security-critic agent, `architect-review` CI gate).** Interleaves across S1/S2 (MG1). S0 lands only the *minimal* method: `CLAUDE.md`, the `.ai/` cursor, the ruleset.
 
 **Context — decisions (owner-confirmed via micro-gates, 2026-07-21; see `docs/hardening_roadmap.md`):**
-- **BI-D1** governance-first · **BI-D2** gated deploy (plan-on-PR + apply-on-merge + `production` Environment approval; `-auto-approve` runs only post-approval) · **BI-D3** central shared repo is the long-term convention/code source (interim: reference loop-orchestrator).
+- **BI-D1** governance-first · **BI-D2** gated deploy (plan-on-PR + apply-on-merge + `production` Environment approval; `-auto-approve` runs only post-approval) · **BI-D3** a central repo hosts the shared conventions/way-of-working that each `CLAUDE.md` references + locally extends (docs only, **not** a shared-code package; interim source: loop-orchestrator's `conventions.md`).
 
 **Tasks:**
 

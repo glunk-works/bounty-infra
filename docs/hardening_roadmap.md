@@ -21,27 +21,29 @@ the wrapper (loop-orchestrator S47-D12; comments on #7/#13).
 | Sprint | Closes | Scope |
 |---|---|---|
 | **S0 — Governance & CI/CD hardening** | #6, #8, #9, #10 | Branch-protection ruleset + minimal working method; gated OpenTofu deploy (plan-on-PR + apply-on-merge, `production` Environment approval); non-bypassable CI on all paths; `run-scan.yml` injection fix + drop unused `GITHUB_TOKEN`. **Also unblocks loop-orchestrator S47's #18** (same file as #6). |
-| **S1 — Scanner security core** | #7, #13 | The scanner's own structural scope check (RoE allowlist before any subprocess) and triage-prompt hardening (delimit/neutralize target-derived fields; triage advisory-only). Consumes the **shared scope validator** from the central repo (BI-D3). Its own planning pass at its boundary. |
+| **S1 — Scanner security core** | #7, #13 | The scanner's **own** structural scope check (RoE allowlist before any subprocess) and triage-prompt hardening (delimit/neutralize target-derived fields; triage advisory-only). The wrap+harden core. Its own planning pass at its boundary. |
 | **S2 — Scanner robustness** | #11, #12, #14 | Tighten task-role IAM to what's used; pin tools/templates/deps (reproducible builds); distinguish partial/failed scans from clean success. |
 
 Method (skills, an IaC/AWS/Actions `security-critic` agent, the fresh-session
 `architect-review` CI gate) layers across S0–S2 — not a dedicated sprint (MG1).
 
-## Parallel workstream — the central shared repo (BI-D3, revised)
+## The central conventions repo (BI-D3)
 
-A **new central repo** is the single source of truth for the working method **and** shared
-code, consumed by both loop-orchestrator and bounty-infra:
-- **Conventions** (the portable Global Conventions) live there; each repo's `CLAUDE.md`
-  references them + adds local extensions.
-- **Shared code** — `scope_validator`, `ingest.sanitize` — migrates there so #7/#13 (here)
-  and loop-orchestrator's own boundary consume **one** implementation, not mirrored copies.
-- **Implication (cross-repo refactor):** loop-orchestrator eventually migrates its
-  `tools/scope_validator`/`tools/ingest` to depend on the shared package — its own planning
-  item, not blocking.
-- **Sequencing:** feeds **S1** (the shared scope validator #7 consumes). Needs its **own
-  architecture/planning pass** (repo creation, package layout, versioning/publish, the
-  loop-orchestrator migration). **S0 does not depend on it** — S0's `CLAUDE.md` references
-  loop-orchestrator's `conventions.md` as the interim source and notes the migration.
+A **new central repo** is the single source of truth for the **working method / Global
+Conventions** — the "our way of working" docs that each repo's `CLAUDE.md` **references**,
+with **local extensions** per repo. This is a **docs/conventions** central home, **not** a
+shared-code package:
+- The portable Global Conventions (Python / IaC / commit taxonomy / Definition of Done) live
+  in the central repo; loop-orchestrator's `conventions.md` moves/mirrors there too.
+- Each repo's `CLAUDE.md` references the central conventions **and adds a local section**
+  (bounty-infra: OpenTofu / Actions-security / scanner DoD).
+- **Explicitly NOT in scope:** sharing *code* (`scope_validator`, `ingest.sanitize`) as a
+  package — #7's scope check is the scanner's **own** implementation (S1). No cross-repo code
+  refactor is implied.
+- **Lightweight** (stand up a repo, host the conventions, point both `CLAUDE.md` files at it)
+  and **does not block or feed S1**. **S0 does not depend on it** — S0's `CLAUDE.md` references
+  loop-orchestrator's `conventions.md` as the interim source and points at the central repo
+  once it exists.
 
 ## OPEN — compute-model architecture decision (raised 2026-07-21; needs its own pass)
 
@@ -72,10 +74,13 @@ lists workflows `build-and-push.yml` that don't exist and claims "least privileg
   on merge-to-main targeting a protected `production` **Environment** with a required
   reviewer; `-auto-approve` stays but runs only post-approval. (Rejected: no Environment gate;
   manual-dispatch-only apply.)
-- **BI-D3 (MG3, revised 2026-07-21) — central shared repo** (best long-term single source):
-  conventions **and** shared code (`scope_validator`, `ingest.sanitize`) live in a new central
-  repo both repos consume. Its own workstream (above); feeds S1. (Chosen over: shared-core +
-  local-extension reference — still two code copies; copied-and-owned — drifts.)
+- **BI-D3 (MG3, 2026-07-21) — a central repo hosts the shared conventions/way-of-working**
+  that each repo's `CLAUDE.md` **references + locally extends** (best long-term home for the
+  method). This is the reference-and-extend model with the shared source in a **dedicated
+  central repo** rather than in loop-orchestrator. **Docs/conventions only — NOT a shared-code
+  package** (`scope_validator` etc. stay each repo's own; #7 is bounty-infra's own impl).
+  (Rejected: shared source living in loop-orchestrator's own repo — a dedicated central home
+  is cleaner long-term; a shared *code* package — not wanted, out of scope.)
 
 ## Cross-repo coupling
 
