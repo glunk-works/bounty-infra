@@ -11,6 +11,43 @@
 protection + a plan gate is the prerequisite for gating everything after it — you cannot
 safely merge security fixes through the very ungated path (#8/#9) that is itself a finding.
 
+## Public-repo posture (BI-D4)
+
+**This repository is intentionally public** (portfolio project). Nothing below is a reason to
+make it private; it is the set of invariants that make "public" safe. Verified 2026-07-21:
+`.tf`/`.yml`/`.py`/`.toml`/`.md` contain **no** account IDs, ARNs, bucket names, or identity
+IDs — every account-specific value resolves at runtime through Infisical (`env.TF_STATE_BUCKET`,
+`env.AWS_OIDC_ROLE_ARN`, `vars.IDENTITY_ID`) or tofu variables. The only committed literal is
+the ECR repo name `glunk-works/bounty-scanner`, which is inert.
+
+**Where each class of sensitive material lives:**
+
+| Class | Home | Never |
+|---|---|---|
+| Genuine secrets, account-specific values | Infisical (`/bounty-infra`, `prod`) | Committed, or echoed to a workflow log |
+| RoE / scope allowlist (S1, #7) | Infisical — **runtime config** | A committed `scope.yaml`. It enumerates which bounty programs the operator is engaged with — the most sensitive artifact the system will hold |
+| Scan findings, triage reports, resolved hosts/subdomains | S3 only | A workflow log, artifact, or PR comment. This is third-party vulnerability data |
+| Pre-remediation vulnerability detail | Draft security advisories (below) | A public issue body, until the fix has landed |
+
+**`tofu plan` output is summarized, never dumped.** Plan renders the account ID, real bucket
+names, subnet/SG IDs, and ARNs at runtime even though none are committed. On a **public** repo,
+workflow artifacts are world-readable, so "post an artifact instead of a PR comment" is **not**
+a mitigation — both disclose. S0-T2 emits change counts + resource addresses only.
+
+**Fork PRs receive no secrets**, so a required `tofu plan` check can never go green for an
+outside contributor. Accepted (no external contributors expected). **`pull_request_target` must
+stay off the table** as the "fix" — it would hand repo-scoped credentials to fork-controlled code.
+
+**Coordinated disclosure.** Findings #6–#14 were filed as public issues while still unpatched.
+Full pre-remediation detail now also lives in **private draft advisories** — `GHSA-59j8-c4rc-2jf4`
+(#6), `GHSA-pf9q-vx7g-f8gr` (#7), `GHSA-p3hr-h7cq-xp5m` (#13) — to be **published once the
+corresponding sprint closes**. Publishing the analysis *after* remediation is better portfolio
+material than the current state, because it demonstrates the timing was understood.
+
+**No private mirror repo.** Each candidate has a better-fitting home than a second repo (table
+above); a mirror buys split history and a sync burden, and none of the four classes wants to
+live in git. Revisit only if engagement contracts or program NDAs need a document home.
+
 **Wrap + harden, not wrap-only:** loop-orchestrator's bounty loop enforces scope/sanitization
 at *its* boundary, but that protects loop-mediated runs only. This scanner is independently
 dispatchable, so #7 (scope) and #13 (triage injection) are fixed **here**, not delegated to
@@ -23,6 +60,15 @@ the wrapper (loop-orchestrator S47-D12; comments on #7/#13).
 | **S0 — Governance & CI/CD hardening** | #6, #8, #9, #10 | Branch-protection ruleset + minimal working method; gated OpenTofu deploy (plan-on-PR + apply-on-merge, `production` Environment approval); non-bypassable CI on all paths; `run-scan.yml` injection fix + drop unused `GITHUB_TOKEN`. **Also unblocks loop-orchestrator S47's #18** (same file as #6). |
 | **S1 — Scanner security core** | #7, #13 | The scanner's **own** structural scope check (RoE allowlist before any subprocess) and triage-prompt hardening (delimit/neutralize target-derived fields; triage advisory-only). The wrap+harden core. Its own planning pass at its boundary. |
 | **S2 — Scanner robustness** | #11, #12, #14 | Tighten task-role IAM to what's used; pin tools/templates/deps (reproducible builds); distinguish partial/failed scans from clean success. |
+
+**#6 severity is anticipatory, not live (qualifier added 2026-07-21).** `workflow_dispatch`
+requires repo **write** access and there is a single collaborator, so #6 is not currently an
+external privilege-boundary crossing — a principal who can dispatch could equally commit a
+malicious workflow. It becomes genuinely High the moment **#18** lands and makes the workflow
+machine-dispatchable from loop-orchestrator, at which point `target_domain` stops being
+operator-typed. This does **not** change the ordering (#6 still ships before #18) but it does
+mean S0 is not firefighting. *(`sprints/S0_governance_hardening/sprint_plan.md` still describes
+this as "a live RCE-with-AWS-creds surface" — overstated on current facts; amend when S0 opens.)*
 
 Method (skills, an IaC/AWS/Actions `security-critic` agent, the fresh-session
 `architect-review` CI gate) layers across S0–S2 — not a dedicated sprint (MG1).
@@ -81,6 +127,12 @@ lists workflows `build-and-push.yml` that don't exist and claims "least privileg
   package** (`scope_validator` etc. stay each repo's own; #7 is bounty-infra's own impl).
   (Rejected: shared source living in loop-orchestrator's own repo — a dedicated central home
   is cleaner long-term; a shared *code* package — not wanted, out of scope.)
+- **BI-D4 (2026-07-21) — public-repo posture** (§ *Public-repo posture* above): the repo stays
+  **public**; secrets and the RoE allowlist live in **Infisical**, findings in **S3**,
+  pre-remediation vuln detail in **draft advisories** published post-fix; `tofu plan` output is
+  summarized only. (Rejected: making the repo private — it is deliberate portfolio material;
+  a **private mirror repo** for the sensitive elements — every candidate has a better home than
+  git, and a mirror adds split history + sync burden.)
 
 ## Cross-repo coupling
 
