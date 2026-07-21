@@ -1,5 +1,23 @@
 name: "1b. Build & Push Image"
 
+# T3(d): the missing half of #8. Before this, a merge to main pushed `:latest`
+# to a MUTABLE ECR repo and the task definition ran `…:latest` — no CI
+# dependency, so merging any src/** change silently replaced the code running
+# in production Fargate. Two fixes, both below:
+#
+# - The CI gate is structural, not a `needs:`/`workflow_run` dependency on
+#   ci.yml. ci.yml runs on `pull_request`; this workflow runs on `push` to
+#   main, which the `protected-integration-branches` ruleset only allows via a
+#   merged PR whose `lint`/`test`/`tofu-validate` checks are required and
+#   green (see ruleset-drift.yml, which watches that this stays true). By the
+#   time this job sees a commit on main, CI already passed on it.
+# - The image is pushed ONLY as `:${{ github.sha }}` — no `:latest` tag — and
+#   a new ECS task-definition revision is registered directly with that
+#   image, so what actually runs is traceable to the commit that built it.
+#   This bypasses Tofu on purpose: infra/main.tf's task definition carries
+#   `lifecycle.ignore_changes = [container_definitions]` so the two don't
+#   fight over this field on the next unrelated `tofu apply`.
+
 on:
   push:
     branches:
@@ -10,7 +28,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  id-token: write 
+  id-token: write
   contents: read
 
 jobs:
@@ -65,8 +83,36 @@ jobs:
         with:
           context: ./src
           push: true
-          tags: |
-            ${{ env.ECR_URL }}:latest
-            ${{ env.ECR_URL }}:${{ github.sha }}
+          # Sha-pinned only — no `:latest`. Mutable tags are what let a merge
+          # silently swap the image an already-running task definition points
+          # at; a sha tag is a new, distinct reference every time.
+          tags: ${{ env.ECR_URL }}:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Deploy sha-pinned image to ECS task definition
+        env:
+          IMAGE: ${{ env.ECR_URL }}:${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          aws ecs describe-task-definition \
+            --task-definition bounty-scanner-task \
+            --query 'taskDefinition' \
+            > current-task-def.json
+
+          # register-task-definition only accepts the input fields — strip the
+          # describe-only ones (arn, revision, status, registeredAt, ...) and
+          # swap in the new image.
+          jq --arg IMAGE "$IMAGE" '
+            .containerDefinitions[0].image = $IMAGE
+            | {
+                family, taskRoleArn, executionRoleArn, networkMode,
+                containerDefinitions, volumes, placementConstraints,
+                requiresCompatibilities, cpu, memory
+              }
+          ' current-task-def.json > new-task-def.json
+
+          aws ecs register-task-definition --cli-input-json file://new-task-def.json
+
+          rm -f current-task-def.json new-task-def.json

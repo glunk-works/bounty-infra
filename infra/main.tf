@@ -18,7 +18,7 @@ provider "aws" {
 resource "aws_vpc" "sec_vpc" {
   cidr_block           = "10.10.0.0/16"
   enable_dns_hostnames = true
-  tags = { Name = "bounty-fargate-vpc" }
+  tags                 = { Name = "bounty-fargate-vpc" }
 }
 
 resource "aws_internet_gateway" "igw" {
@@ -65,7 +65,7 @@ resource "aws_security_group" "fargate_sg" {
 resource "aws_ecr_repository" "scanner_repo" {
   name                 = "glunk-works/bounty-scanner"
   image_tag_mutability = "MUTABLE"
-  force_delete         = true 
+  force_delete         = true
 }
 
 resource "aws_ecs_cluster" "scanner_cluster" {
@@ -84,7 +84,7 @@ resource "aws_cloudwatch_log_group" "scanner_logs" {
 resource "aws_iam_role" "execution_role" {
   name = "bounty-fargate-execution-role"
   assume_role_policy = jsonencode({
-    Version = "2012-10-17"
+    Version   = "2012-10-17"
     Statement = [{ Action = "sts:AssumeRole", Effect = "Allow", Principal = { Service = "ecs-tasks.amazonaws.com" } }]
   })
 }
@@ -97,7 +97,7 @@ resource "aws_iam_role_policy_attachment" "exec_attach" {
 resource "aws_iam_role" "task_role" {
   name = "bounty-fargate-task-role"
   assume_role_policy = jsonencode({
-    Version = "2012-10-17"
+    Version   = "2012-10-17"
     Statement = [{ Action = "sts:AssumeRole", Effect = "Allow", Principal = { Service = "ecs-tasks.amazonaws.com" } }]
   })
 }
@@ -145,7 +145,7 @@ resource "aws_ecs_task_definition" "scanner_task" {
   container_definitions = jsonencode([
     {
       name      = "scanner-container"
-      image     = "${aws_ecr_repository.scanner_repo.repository_url}:latest"
+      image     = "${aws_ecr_repository.scanner_repo.repository_url}:${var.image_tag}"
       essential = true
       environment = [
         { name = "S3_BUCKET_NAME", value = var.findings_bucket_name }
@@ -160,4 +160,17 @@ resource "aws_ecs_task_definition" "scanner_task" {
       }
     }
   ])
+
+  # T3(d): after the bootstrap apply, `build-image.yml` registers new revisions
+  # of this task definition directly against ECS — one per merge to main, image
+  # tagged by commit sha, never `:latest` — so every deploy is CI-gated
+  # (branch protection requires `lint`/`test` green before merge) and every
+  # running image is traceable to the commit that produced it. `ignore_changes`
+  # stops Tofu from reverting that on the next unrelated apply: this field is
+  # deliberately not fought over between CI and IaC. BI-D2's plan+approval gate
+  # still covers everything else in this resource and this file — it governs
+  # AWS topology changes, not routine application image delivery.
+  lifecycle {
+    ignore_changes = [container_definitions]
+  }
 }

@@ -1,14 +1,20 @@
 name: "Continuous Integration"
 
+# T3(a): NO `paths:` filter. A required check on a path-filtered workflow
+# deadlocks — a PR touching only docs/ would never trigger this workflow, so
+# the required check sits pending forever and the PR can never merge. Runs on
+# every PR; jobs with nothing relevant to a given change still report a
+# conclusion (they just do near-nothing), which is what keeps required checks
+# from stranding.
+#
+# T3(b): job ids ARE the required-check contexts — no `name:` override on any
+# job below. Renaming a job here silently un-requires the check it backs.
+
 on:
   pull_request:
-    paths:
-      - 'src/**'
-      - '.github/workflows/ci.yml'
 
 jobs:
-  validate:
-    name: "Lint & Test"
+  lint:
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -16,20 +22,26 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
-        with: {python-version: "3.11"}
-        
+        with: { python-version: "3.11" }
       - run: pip install hatch
-      - run: |
-          python -m pip install --upgrade pip
-          python -m pip install --upgrade hatchling
-      - name: Hatch Quality Gates
-        run: |
-          hatch run lint:check
-          hatch run test:run
+      - name: Ruff + bandit
+        run: hatch run lint:check
+
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./src
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install hatch
+      - name: Pytest
+        run: hatch run test:run
 
   package:
-    name: "Hatch Build & Validate"
-    needs: validate
+    needs: [lint, test]
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -37,12 +49,36 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
-        with: {python-version: "3.14"}
+        with: { python-version: "3.14" }
       - run: pip install hatch
       - name: Hatch Build Wheel
         run: hatch build
       - name: Verify Distribution
         run: |
-          # Ensure the wheel is generated and installable
           pip install dist/*.whl
           python -c "import bounty_scanner.scanner; print('Build verified successfully')"
+
+  # T3(c): credential-free — `-backend=false` needs no AWS/Infisical access, so
+  # this runs on every PR (including forks), unlike T2's `tofu-plan`, which
+  # holds real (read-only) credentials.
+  tofu-validate:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./infra
+    steps:
+      - uses: actions/checkout@v7
+      - uses: opentofu/setup-opentofu@v2
+      - name: tofu fmt
+        run: tofu fmt -check -recursive
+      - name: tofu validate
+        run: |
+          set -euo pipefail
+          tofu init -backend=false
+          tofu validate
+      - name: Setup tflint
+        uses: terraform-linters/setup-tflint@v6
+        with:
+          tflint_version: v0.64.0
+      - name: tflint
+        run: tflint --recursive

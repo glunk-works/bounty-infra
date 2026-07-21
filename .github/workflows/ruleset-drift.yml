@@ -1,0 +1,69 @@
+name: Ruleset drift
+
+# T3(e), ported from loop-orchestrator's ruleset-drift.yml. Every "required"
+# check in this repo blocks a merge only because the
+# `protected-integration-branches` ruleset says so — its total absence went
+# unseen for this repo's entire life until 2026-07-19. This workflow re-reads
+# the effective rules on `main` on a schedule (plus workflow_dispatch, since a
+# cron-only trigger cannot be tested without waiting for the cron) and fails
+# loudly the moment they no longer match what S0 put in place.
+#
+# Deliberately NOT a required check and NOT a job in ci.yml (loop-orchestrator
+# FD2): a required check is required only because the ruleset says so, so
+# making this check itself required would un-require it the instant the
+# ruleset it watches is deleted — silently, on the exact failure it exists to
+# catch. It gates nothing here and is gated by nothing.
+
+on:
+  schedule:
+    - cron: "23 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ruleset-drift:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify the protected-integration-branches ruleset still holds
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          rules=$(gh api "repos/${REPO}/rules/branches/main")
+
+          missing_types=()
+          for t in deletion non_fast_forward pull_request required_status_checks; do
+            if ! jq -e --arg t "$t" 'any(.[]; .type == $t)' <<<"$rules" >/dev/null; then
+              missing_types+=("$t")
+            fi
+          done
+
+          contexts=$(jq -c '
+            [.[] | select(.type == "required_status_checks")
+                 | .parameters.required_status_checks[].context]
+          ' <<<"$rules")
+
+          missing_checks=()
+          for c in lint test tofu-validate tofu-plan; do
+            if ! jq -e --arg c "$c" 'index($c) != null' <<<"$contexts" >/dev/null; then
+              missing_checks+=("$c")
+            fi
+          done
+
+          if [ ${#missing_types[@]} -gt 0 ] || [ ${#missing_checks[@]} -gt 0 ]; then
+            echo "::error::Branch protection on 'main' has been weakened or removed."
+            if [ ${#missing_types[@]} -gt 0 ]; then
+              echo "::error::Missing rule types: ${missing_types[*]}"
+            fi
+            if [ ${#missing_checks[@]} -gt 0 ]; then
+              echo "::error::Missing required checks: ${missing_checks[*]}"
+            fi
+            echo "::error::See docs/hardening_roadmap.md and sprints/S0_governance_hardening/sprint_plan.md (T1/T3) — this ruleset is what makes every other CI check in this repo actually block a merge; restore it in Settings > Rules."
+            exit 1
+          fi
+
+          echo "OK: ruleset intact — 4 rule types, 4 required checks."
