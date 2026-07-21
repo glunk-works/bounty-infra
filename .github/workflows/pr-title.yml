@@ -1,0 +1,95 @@
+name: PR title
+
+# Ported from loop-orchestrator's `pr-title.yml` (CLAUDE.md: read its equivalent
+# before designing a governance/CI pattern here, so the two repos stay diffable).
+#
+# Merges here are squashes, so the PR title becomes the commit subject on `main` —
+# it is the only message that survives, and therefore the only one worth enforcing.
+# WIP commits inside a branch stay free-form.
+#
+# WHY THIS IS ITS OWN WORKFLOW AND NOT A JOB IN ci.yml — this is the load-bearing
+# part, and loop-orchestrator learned it the hard way (its BL-10):
+#   * A title check needs `edited` to fire, or a bad title could only be cleared by
+#     pushing a dummy commit.
+#   * But `edited` inside ci.yml would let a prose-only title edit wake — and, under a
+#     cancelling concurrency group, CANCEL — an in-flight or already-green run of the
+#     heavy lint/test/tofu-validate chain.
+#   * A cancelled-then-replaced run can report `skipped`, and `skipped` satisfies a
+#     required check rather than failing it. The PR then merges with the real gates
+#     having silently never run.
+# Keeping this separate means ci.yml never sees `edited` at all, and this check gates
+# nothing downstream: a bad title costs a cheap re-run, never a skipped security gate.
+#
+# Required checks match by check-run name = job id, so the job below is bare `pr-title`
+# with no `name:` override (CLAUDE.md).
+
+on:
+  pull_request:
+    # `edited` is load-bearing: without it, a title fix could not turn this check green.
+    # `synchronize`/`reopened` guarantee a check-run on every head SHA, which is what a
+    # required check needs in order to ever resolve.
+    types: [opened, edited, reopened, synchronize]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Reads the title straight off the event payload — no checkout, no API call, so this
+# workflow needs no token scopes at all.
+permissions: {}
+
+jobs:
+  pr-title:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate Conventional Commits title
+        # The title rides `env:` rather than being interpolated into the script — a
+        # PR title is attacker-controllable text, and inlining `${{ }}` into a `run:`
+        # block is exactly finding #6 (CLAUDE.md forbids it without exception).
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          # DELIBERATE DEVIATION from loop-orchestrator's otherwise-identical pattern:
+          # its scope class is `[a-z0-9._/-]+`, lower-case only. bounty-infra's
+          # established scope convention is upper-case sprint ids — `docs(S0):`,
+          # `ci(S0):`, and now `SG`/`SE` — so the upstream regex would have rejected
+          # essentially every commit this repo makes, stranding every PR the moment
+          # this check became required. Scope class widened to allow upper case; every
+          # other element (type list, lower-case subject, no trailing period, 72 chars)
+          # is unchanged, so the two repos stay diffable on the parts that do match.
+          pattern='^(feat|fix|docs|test|refactor|perf|chore|ci|revert)(\([A-Za-z0-9._/-]+\))?!?: [a-z].*[^.]$'
+          if [[ ! "$TITLE" =~ $pattern ]]; then
+            echo "::error::PR title is not a valid Conventional Commits subject: '$TITLE'"
+            echo "Expected: type(scope): imperative subject   (lower-case, no trailing period)"
+            echo "Types: feat|fix|docs|test|refactor|perf|chore|ci|revert   '!' marks a breaking change."
+            exit 1
+          fi
+          # Length limit is 90, not loop-orchestrator's 72. Measured against this
+          # repo's actual history: 7 of the last 20 subjects exceeded 72, so 72 would
+          # not have tightened practice here, it would have rejected it.
+          #
+          # Bots are exempt from the length check entirely, and that part is a
+          # correctness fix rather than a preference: Dependabot composes its own
+          # titles ("chore(deps): bump the github-actions group across 1 directory
+          # with 6 updates" — 76 chars) and nobody can shorten them. With this check
+          # required and no exemption, every Dependabot PR would be permanently
+          # unmergeable. Bot titles are still held to the grammar rule above, which
+          # Dependabot already satisfies; only the length ceiling is waived.
+          LIMIT=90
+          # Patterns are QUOTED deliberately: unquoted, `[bot]` is a glob character
+          # class matching a single `b`, `o`, or `t`, so `dependabot[bot]` would match
+          # "dependabott" and never the literal actor name. Quoting makes it literal.
+          case "$ACTOR" in
+            'dependabot[bot]'|'dependabot-preview[bot]'|'github-actions[bot]')
+              echo "Actor '$ACTOR' is a bot — grammar enforced, length check waived."
+              echo "OK: $TITLE"
+              exit 0
+              ;;
+          esac
+          if [[ ${#TITLE} -gt $LIMIT ]]; then
+            echo "::error::PR title is ${#TITLE} chars; the limit is ${LIMIT}."
+            exit 1
+          fi
+          echo "OK: $TITLE"

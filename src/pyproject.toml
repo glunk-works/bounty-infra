@@ -44,5 +44,40 @@ dependencies = [
 [tool.hatch.envs.test.scripts]
 run = "pytest ./tests/"
 
+# SG: dependency CVE audit. Deliberately NOT `skip-install` — pip-audit scans the
+# packages actually installed in the environment, so the project's runtime deps
+# (google-genai, pydantic, boto3) have to be present or the audit would inspect an
+# empty closure and pass vacuously. `--skip-editable` excludes only bounty-scanner
+# itself, which hatch installs in dev mode and which isn't on PyPI to be audited;
+# every third-party dependency is still checked against OSV/PyPI advisories.
+# Versions pinned rather than floating: CLAUDE.md forbids adding a `@latest`-style
+# install while #12 is open. These two pins match loop-orchestrator's, so the
+# versions are already exercised in a sibling repo rather than guessed.
+[tool.hatch.envs.audit]
+dependencies = [
+    "pip-audit==2.10.1",
+]
+[tool.hatch.envs.audit.scripts]
+# pip-audit scans everything installed, which includes the environment's own pip —
+# and a bootstrap pip lagging one patch release will fail this gate for a reason
+# that has nothing to do with what the scanner ships. Upgrading it first REMEDIATES
+# that instead of suppressing it with `--ignore-vuln`: if the toolchain's pip really
+# does have an advisory, the answer is to not run a vulnerable pip. Self-maintaining,
+# and it keeps a red `dependency-audit` meaning "our dependencies have a CVE."
+run = [
+    "python -m pip install --quiet --upgrade pip",
+    "pip-audit --skip-editable {args}",
+]
+
+# SG: CycloneDX SBOM of the same installed closure the audit covers. Also not
+# `skip-install`, for the same reason — `cyclonedx-py environment` enumerates the
+# environment it runs in.
+[tool.hatch.envs.sbom]
+dependencies = [
+    "cyclonedx-bom==7.3.0",
+]
+[tool.hatch.envs.sbom.scripts]
+run = "cyclonedx-py environment -o sbom.json"
+
 [tool.hatch.build.targets.wheel]
 packages = ["bounty_scanner"]
