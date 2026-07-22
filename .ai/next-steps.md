@@ -6,6 +6,35 @@ Regenerate this at the end of every working session.
 
 ## Now
 
+**Session 6 (Sonnet, T5) SHIPPED — cursor corrected 2026-07-22 (Opus). The next action is
+session 7 (Opus): disposition the findings.** A prior session's `state.json` still read "confirm
+the dirty tree, then `/ship` both files" — that ship is **already done**: `docs/roe_operator_runbook.md`
++ `sprints/SW_way_of_working/task5_session6_findings.md` are committed (`008911c`) and open as
+**[#49](https://github.com/glunk-works/bounty-infra/pull/49)** (all 10 checks green, MERGEABLE).
+`last_commit` was pointing at `cb6d698`, which is **PR #48's** head, not this branch's tip — now
+fixed to `008911c`.
+
+**Two work-product PRs are open and await the human's merge, in this order:**
+- **[#48](https://github.com/glunk-works/bounty-infra/pull/48)** — `docs(SW): adopt the way-of-working
+  plugin (T4)` (commits `45280f7` + `cb6d698`; the plugin adoption itself, **not yet in `main`**).
+- **[#49](https://github.com/glunk-works/bounty-infra/pull/49)** — session-6 runbook + findings log
+  (`008911c`; cut from `main` **independently** of #48 — its only non-main commit is `008911c`, so
+  it carries none of #48's T4 changes).
+
+**Then session 7 (Opus, T5 disposition):** read `sprints/SW_way_of_working/task5_session6_findings.md`
+and disposition each of its **six** findings (F1–F6 — the log's intro line still says "five",
+written before F6 was appended) exactly one of two ways: a **new schema key** (upstream fix in
+claude-workbench) or **not portable** (skill goes repo-local; say what WB-D4 got wrong). Overriding
+locally in bounty-infra is not a third option (BI-D11). F1–F4 share one root cause — the coupling
+grep only catches leaked *repo/org names*, so hardcoded *paths/values* (`docs/migration_roadmap.md`,
+`.ai/context/*`, loop-orchestrator's 8 required-check names) sailed through "zero hits." F5/F6 are
+scope/phrasing questions, not value bugs. Land the schema changes as a claude-workbench PR
+(human-merged), record reasoning per finding, then update this cursor to close SW and point at
+loop-orchestrator's adoption sprint. **#19 closes there.** The verbatim session-7 kickoff is in the
+sprint plan's § *Session 7*.
+
+---
+
 **SW — way of working — was planned 2026-07-22 (Opus pass) and is the next sprint with code to
 write.** `sprints/SW_way_of_working/sprint_plan.md`, decisions **BI-D10..D13** in the roadmap.
 Extract loop-orchestrator's Claude Code workflow layer (7 skills, 4 portable agents, the
