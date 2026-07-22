@@ -6,6 +6,20 @@ Regenerate this at the end of every working session.
 
 ## Now
 
+**S1 merged 2026-07-22** ([#41](https://github.com/glunk-works/bounty-infra/pull/41), squash
+commit `eaf8038`) — but with the **single-shared-RoE-document** design, not the per-engagement
+revision below. **A stranded-commit incident happened during this session, recovered.** The
+per-engagement revision (owner-flagged, see the S1 narrative further down) was pushed to #41's
+branch, but #41 had already merged by the time the push landed — this repo's own recurring
+"push after merge" gotcha (Gotchas section below), now hit a fourth time. Recovered the same
+way as every prior instance: confirmed via `git merge-base --is-ancestor` + a content diff that
+`main` genuinely lacked the revision (not just a squash-SHA false alarm), branched fresh from
+`main`, cherry-picked the one stranded commit cleanly, re-verified green, and opened
+**[#42](https://github.com/glunk-works/bounty-infra/pull/42)** — open, awaiting CI + human merge.
+**The dead branch `sprint/S1-scanner-security-core` still exists remotely with that one commit
+on it** (not force-deleted by this session — nothing else worth preserving is on it, confirmed by
+the cherry-pick, but deleting a branch wasn't this session's call to make unprompted).
+
 **S0 closed** (#6, #8, #9, #10 all remediated and behaviorally verified). **The compute-model
 architecture pass is also done — BI-D5 is locked** (2026-07-21): scan egress leaves AWS for
 per-scan ephemeral VMs on **Vultr**; AWS keeps the control plane. See
