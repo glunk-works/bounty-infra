@@ -317,6 +317,22 @@ exist and claims "least privilege IAM" that #11 contradicts — fold into a docs
     Infisical-on-VM in BI-D8. **S1 ships enforcement against a hand-authored document**;
     automating the pull is a follow-on task, so the schema is validated by hand against a real
     program before any sync code is written against it.
+  - **Per-program `identification` block** (optional: `ua_suffix`, `headers`) extends the global
+    User-Agent for one program, since programs sometimes mandate a specific marker and H1
+    surfaces that in the structured-scope `instruction` field. Keeps such a requirement an **RoE
+    edit, not a code change**. `instruction` is third-party text and is **transcribed by an
+    operator, never auto-parsed into headers**.
+  - **The UA is platform-neutral and never leads with a platform brand.** `HackerOne-Research-…`
+    was proposed and rejected: a platform name in the product-token position implies the traffic
+    originates from **HackerOne Inc.**, which creates a problem with the platform if a target
+    complains about traffic branded as theirs, and is simply wrong when the selected program is a
+    Bugcrowd one. Identify *with* a platform via a resolvable contact URL; never *as* one.
+    Locked: `bounty-scanner/<version> (+https://hackerone.com/seuss)` — RFC 9110 product token
+    plus the established `+URL` bot convention, contact being the operator's H1 profile
+    (self-authenticating; shows a receiving SOC this is a real researcher). `<version>` is read
+    from **package metadata**, never hardcoded — a UA claiming a version the build isn't is worse
+    than none. **An unset contact remains a startup error**, so an anonymous scanner cannot ship
+    by accident.
 
 ## Cross-repo coupling
 

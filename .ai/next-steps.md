@@ -42,13 +42,21 @@ Plans: `sprints/S1_scanner_security_core/sprint_plan.md` and
 2026-07-22 and S1's *scanner code* is deliberately substrate-neutral, so SE will not invalidate
 it (its IAM grant is a different story — see BI-D8's scope correction).
 
-**Two OPERATOR actions gate S1 actually working, neither of which a coder can do:**
-1. **The UA contact URL/email** (#32) — no default, and an unset contact is a deliberate startup
-   error so an anonymous scanner can't ship by accident. Must be real and reachable; its whole
-   purpose is giving an abuse desk somewhere to write.
-2. **The RoE document itself** — a hand-authored JSON object in S3 holding real program scope.
-   S1 ships the *mechanism*; until that object exists a fail-closed scanner correctly refuses to
-   scan anything. **"S1 merged" and "scans work again" are two separate events.**
+**One OPERATOR action still gates S1 actually working, and a coder cannot do it:**
+0. ✅ **UA — RESOLVED 2026-07-22.** `bounty-scanner/<version> (+https://hackerone.com/seuss)`,
+   platform-neutral, `<version>` read from package metadata (never hardcoded), plus an optional
+   per-program `identification` override in the RoE. *(`HackerOne-Research-Seuss` was proposed
+   and rejected: no contact mechanism — which defeats #32's entire purpose — no version, and
+   leading with a platform brand implies the traffic is HackerOne Inc.'s, wrong outright when
+   the program is a Bugcrowd one.)* **One eyeball check left:** confirm
+   `https://hackerone.com/seuss` resolves. It could not be verified programmatically (H1
+   profiles are JS-rendered, so a fetch returns only the shell). A contact URL that 404s is
+   **worse than no contact** — it reads as a forged attempt at looking legitimate.
+1. **The RoE document itself — the one still outstanding.** A hand-authored JSON object in S3
+   holding real program scope (BI-D9), for both the HackerOne and Bugcrowd programs. S1 ships
+   the *mechanism*; until that object exists a fail-closed scanner correctly refuses to scan
+   anything — right behavior, but **"S1 merged" and "scans work again" are two separate
+   events.**
 
 **Do not start the IaC security scan or the container image scan** — both are SG gates still
 pending (not part of the four just closed above) that should follow SE (see the ordering note
