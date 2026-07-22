@@ -27,22 +27,71 @@ extended `ruleset-drift.yml`'s taxonomy to match (merged), *then* the live rules
 stays deliberately ungated — same BL-10 reasoning, unaffected by the three other SG additions
 landing alongside it (confirmed by owner).
 
-**S1 is planned as of 2026-07-22** (Opus pass, 5 micro-gates) — and it grew a prerequisite.
-Plans: `sprints/S1_scanner_security_core/sprint_plan.md` and
-`sprints/SC_scope_core_extraction/sprint_plan.md`. New decisions **BI-D6/D7/D8** in the roadmap.
+**S1 was planned 2026-07-22** (Opus pass, 5 micro-gates) — and it grew a prerequisite, **SC**,
+which is now done, and **S1's own code is now written and locally green**, both awaiting human
+merge (2026-07-22, Sonnet session). Plans: `sprints/S1_scanner_security_core/sprint_plan.md` and
+`sprints/SC_scope_core_extraction/sprint_plan.md`. Decisions **BI-D6/D7/D8/D9** in the roadmap.
 
-**Next action — SC, then S1. Model Sonnet for both** (the specs exist; execute them):
+**SC — done.** `glunk-works/scope-core` stood up (public repo, `scope_core/` package + ported
+tests, `protected-integration-branches` ruleset with `lint`/`test`/`test-py314` required —
+[scope-core#1](https://github.com/glunk-works/scope-core/pull/1) **merged**, main HEAD
+`7345de55`). loop-orchestrator re-pointed at it, local `tools/scope_validator`/`tools/ingest`
+deleted — [loop-orchestrator#182](https://github.com/glunk-works/loop-orchestrator/pull/182)
+**open**, all 8 required checks green including a genuine fresh-session Architect HITL review
+(dispatched as an independent Opus subagent, per that repo's `hitl-review.yml`) — **needs a
+human merge click**, but this does NOT block S1 (only `scope-core` itself existing does, and it
+already merged). One real catch along the way: hatchling refuses to build with a PEP 508
+direct-reference dependency present unless `tool.hatch.metadata.allow-direct-references = true`
+is set — the SC smoke test (pip-audit/cyclonedx-py) didn't cover this failure mode; both repos'
+`pyproject.toml` now carry it.
 
-1. **SC — extract `scope-core`.** Stand up `glunk-works/scope-core` from loop-orchestrator's
-   `tools/scope_validator` + `tools/ingest.sanitize`, re-point loop-orchestrator, **delete its
-   local copies**. Cross-repo, touches no bounty-infra `src/`. **Blocks S1.**
-2. **S1 — #7 + #13 + #32** at the scanner boundary, consuming `scope-core`.
+**S1 — code written, locally green, PR not yet opened at cursor-write time.** New
+`src/bounty_scanner/roe.py` (RoE load/select/translate, Tasks 1–2); `scanner.py` mounts
+enforcement at three points, UA + rate-limiting, and triage-prompt sanitize+fence (Tasks 3–5);
+`run-scan.yml` gained a required `program` input and passes `--program`/`--scope-uri`/
+`--contact-url` through the existing `jq -n --arg` pattern. 58 tests green (`test_roe.py` new,
+`test_scanner.py` migrated to real `tmp_path` I/O per the plan's own note — mocking `open`
+couldn't assert on filtered-file *content*, which is the actual scope-enforcement behavior worth
+testing), `lint:check` clean, `hatch build` + wheel-install verified, and `dependency-audit`/
+`sbom` re-run against the real (not synthetic) `scope-core` dependency — both still clean.
 
-**SE** remains independent and unblocked if you'd rather do it first — but S1 was chosen
-2026-07-22 and S1's *scanner code* is deliberately substrate-neutral, so SE will not invalidate
-it (its IAM grant is a different story — see BI-D8's scope correction).
+**One real, verified-against-source finding from Task 4, not just implemented from the spec:**
+nuclei v3.11.0's own template-header application is an **unconditional** map assignment that
+runs *after* the CLI `-H` value is set on the request — so a template declaring its own
+`headers: User-Agent: ...` silently overrides the global `-H "User-Agent: ..."` flag for that
+one request (nuclei's own random-UA *fallback*, by contrast, is existence-checked and correctly
+yields to the CLI flag). Confirmed by reading `pkg/protocols/http/build_request.go` and
+`pkg/protocols/utils/http/requtils.go` at the pinned tag, not assumed. Not fixable from this
+repo — templates are unpinned third-party content (`src/Dockerfile`) — documented in code and
+here rather than silently claimed as airtight.
 
-**One OPERATOR action still gates S1 actually working, and a coder cannot do it:**
+**The sprint plan's IAM-grant claim was wrong — checked, not assumed, and no PR is needed.**
+The plan said "S1's `s3:GetObject`/`kms:Decrypt` grant lives in `global-bootstrap`," extrapolated
+from the T2 (OIDC role)/T4 (`ecs:DescribeTasks`) precedents — but those were both about the
+**GitHub Actions CI role** (`aws_iam_role.github_actions_role["bounty-infra"]`, defined in
+`global-bootstrap/project_policies.tf`). The RoE grant is a different principal entirely: the
+**ECS task role** the scanner container assumes at runtime (`aws_iam_role.task_role`,
+`infra/main.tf:97`), which already carries `s3:GetObject`+`kms:Decrypt` on the **whole findings
+bucket** (`arn:aws:s3:::${var.findings_bucket_name}/*`, bucket-wide, no prefix restriction) via
+the existing `s3_write_policy` — because that role already reads/writes findings there.
+`global-bootstrap` owns the bucket + KMS key (`aws_s3_bucket.findings_bucket` /
+`aws_kms_key.findings_key`, outputs `findings_bucket_name`/`findings_kms_key_arn`), but grants
+access to neither role from there.
+**Conclusion: store the RoE object in the SAME findings bucket** (convention:
+`roe/scope.json`) and **no IAM change is needed anywhere** — not `global-bootstrap`, and not
+`infra/main.tf` either (which BI-D5 freezes anyway, so this is also the change that respects
+that freeze rather than needing an exception to it). `ROE_SCOPE_URI` becomes
+`s3://<findings-bucket-name>/roe/scope.json`.
+
+**One NEW operator/cross-repo gate remains, from the corrected picture above:**
+
+1. **Infisical needs a new secret.** `ROE_SCOPE_URI` (BI-D8: Infisical holds the pointer, never
+   the scan VM), value `s3://<findings-bucket-name>/roe/scope.json` per the correction above,
+   must be added to `/bounty-infra` (prod) before `run-scan.yml` can dispatch a scan. Not yet
+   added — this session has no Infisical write access.
+
+**One OPERATOR action still gates S1 actually working end-to-end, unchanged from the planning
+pass, and a coder cannot do it:**
 0. ✅ **UA — RESOLVED 2026-07-22.** `bounty-scanner/<version> (+https://hackerone.com/seuss)`,
    platform-neutral, `<version>` read from package metadata (never hardcoded), plus an optional
    per-program `identification` override in the RoE. *(`HackerOne-Research-Seuss` was proposed
@@ -54,9 +103,9 @@ it (its IAM grant is a different story — see BI-D8's scope correction).
    **worse than no contact** — it reads as a forged attempt at looking legitimate.
 1. **The RoE document itself — the one still outstanding.** A hand-authored JSON object in S3
    holding real program scope (BI-D9), for both the HackerOne and Bugcrowd programs. S1 ships
-   the *mechanism*; until that object exists a fail-closed scanner correctly refuses to scan
-   anything — right behavior, but **"S1 merged" and "scans work again" are two separate
-   events.**
+   the *mechanism*; until that object exists (and `ROE_SCOPE_URI` above points at it) a
+   fail-closed scanner correctly refuses to scan anything — right behavior, but **"S1 merged"
+   and "scans work again" are two separate events.**
 
 **Do not start the IaC security scan or the container image scan** — both are SG gates still
 pending (not part of the four just closed above) that should follow SE (see the ordering note

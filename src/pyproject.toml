@@ -2,6 +2,15 @@
 requires = ["hatchling>=1.21.0"]
 build-backend = "hatchling.build"
 
+[tool.hatch.metadata]
+# Required for the scope-core dependency below: hatchling refuses to build
+# metadata for a PEP 508 direct-reference dependency (a `pkg @ url` entry)
+# unless this is explicitly set (same fix loop-orchestrator needed when it
+# added the same dependency). A project carrying a direct reference can't
+# itself be published to PyPI -- accepted; this repo publishes a container
+# image via `hatch build`, not to an index.
+allow-direct-references = true
+
 [project]
 name = "bounty-scanner"
 version = "0.1.0"
@@ -10,7 +19,14 @@ requires-python = ">=3.11"
 dependencies = [
     "google-genai>=0.1.0",
     "pydantic>=2.0.0",
-    "boto3>=1.34.0"
+    "boto3>=1.34.0",
+    # Scope-enforcement + ingestion-sanitization primitives (S1 #7/#13),
+    # pinned by commit SHA via a PEP 508 direct reference -- smoke-tested
+    # against pip-audit/cyclonedx-py before this shape was adopted (SC pass,
+    # sprints/SC_scope_core_extraction/sprint_plan.md). Same SHA
+    # loop-orchestrator's re-point pins (both repos must move together on
+    # a scope-core bump).
+    "scope-core @ https://github.com/glunk-works/scope-core/archive/7345de5578a43fb5badabe5cb6166a64d74c4f88.tar.gz"
 ]
 
 [tool.hatch.envs.default]
