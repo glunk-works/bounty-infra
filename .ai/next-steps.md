@@ -113,8 +113,7 @@ ruleset applied immediately → all content landed on a branch → PR → tag on
 
 **Task 3a done 2026-07-22 (Opus, session 3) — `reference/project-schema.md` written and all 7
 skills generalized against it.** PR: [claude-workbench#2](https://github.com/glunk-works/claude-workbench/pull/2)
-(`sprint/SW-t3a-schema-and-skills` → `main`), **open, `lint` green, unmerged**. **`v0.2.0` is
-deliberately NOT tagged** — the plan tags it at the end of session 4, after the agents.
+(`sprint/SW-t3a-schema-and-skills` → `main`), **merged**.
 
 - **PR #1 had already been merged by the owner** by the time this session started, so `main`
   carried the skeleton and T3a branched from it — the cursor's "PR open, unmerged" note above was
@@ -148,11 +147,78 @@ deliberately NOT tagged** — the plan tags it at the end of session 4, after th
   reintroduced. CI `lint` is green on the PR. Locally the three `jq`-dependent `lint.sh` checks
   fail for want of `jq` on this machine; they cover manifest files T3a does not touch, and CI has it.
 
-**Next action: start session 4 (Opus) — T3b, generalize the 4 agents against the schema, add the
-grep gate as a CI job, tag `v0.2.0`.** The sprint plan's § *Session plan* carries the verbatim
-kickoff prompt; read `project-schema.md` from PR #2's branch (or `main`, if #2 has merged by then).
-`/clear` first. **This repo still has no `/resume`/`/handoff`** — until Task 4 lands, this file is
-the handoff protocol, run by hand: `/clear` between every session, and **every session ends by
+**Task 3b done 2026-07-22 (Opus, session 4) — the 4 agents generalized, the coupling gate is a
+real CI job, `v0.2.0` tagged. Task 3 is complete.** PR:
+[claude-workbench#3](https://github.com/glunk-works/claude-workbench/pull/3)
+(`sprint/SW-t3b-agents` → `main`), **open, both checks green, unmerged**. `v0.2.0` tagged on the
+branch head (`3a3144c`), same reasoning as `v0.1.0` — the ruleset means content cannot reach
+`main` without the human's merge click, and a tag resolves regardless of which branch it sits on.
+
+- **Agent coupling is a different KIND from skill coupling, and the sprint plan's inventory
+  didn't say so.** The skills' coupling was **values** — check names, commands, paths — each of
+  which became a schema key cleanly. The agents' coupling is **knowledge**: loop-orchestrator's
+  module boundaries, its five named subprocess surfaces, its specific trust boundaries, its
+  specific high-value doc claims. **None of that is expressible as a schema key**, and none of it
+  is true of the next repo. The plan's inventory row for `architect` ("boundaries read from local
+  `CLAUDE.md`") had the right instinct but understated the scale — it reads as one line to swap,
+  and it was most of the agent.
+- **Resolution, recorded as WB-D5:** each agent now carries the **shapes** that reliably hold
+  invariants (import layering, I/O ownership, subprocess surfaces, credential holders, taint
+  source/sink classes, the claim shapes that drift in prose) and **builds the instance list at
+  spawn time** from `.ai/project.yml` + the consuming repo's `CLAUDE.md` + `{threat_model}` + the
+  guarding tests. **Accepted consequence, stated rather than hidden: the agents are thinner and
+  start colder.** That is the correct trade — an agent asserting a boundary the repo does not
+  have produces confident *false* findings, which is the most trust-destroying thing a critic can
+  emit. The rejected alternative worth remembering: schema keys enumerating a repo's invariants
+  would just be that repo's `CLAUDE.md` restated in YAML — a second copy, exactly what BI-D11
+  exists to eliminate.
+- **A subagent starts cold, so every agent must read `.ai/project.yml` explicitly.** Skills
+  inherit the session's context; a spawned agent inherits none of it. That first-step read is not
+  boilerplate — it is what stops an agent reviewing repo B against invariants it remembers from
+  repo A. Noted in `project-schema.md` alongside the skill-side rule.
+- **`models` governs sessions, not subagent spawns** — a real seam limit found while writing this,
+  now documented in `project-schema.md`. A plugin agent's runtime model comes from `model:` in its
+  own frontmatter, which the harness reads before any skill runs, so there is **nothing to
+  substitute a schema value into**. `models.architect: sonnet` in a consuming repo changes its
+  *session* routing and does **not** change what the `architect` subagent runs as. A repo that
+  genuinely needs a different agent model is the not-portable case, not a schema key.
+- **Two portable hazards this repo family has actually been bitten by were added to
+  `security-critic`**, since they generalize where the loop-orchestrator instances did not:
+  **validate/use mismatches** (a normalized/decoded/re-encoded copy is a parser differential —
+  S1's NFKC finding) and **fail-closed controls defeated by matching a file's except-and-continue
+  house style** (S1's `scanner.py` finding). `docs-consistency` gained **frozen wire strings** to
+  its never-flag list — it must never recommend "tidying" `{review.ci_gate.header}`.
+- **The gate was observed RED before being trusted green.** `scripts/coupling-check.sh` + a
+  `coupling` job (its own job, not a step in `lint` — different question, no toolchain needed, so
+  it reports a verdict even when the CLI install fails). A deliberate violation injected into
+  **both** `agents/coder.md` and `skills/retro/SKILL.md` failed with exit 1 and named both trees
+  and both `file:line` hits; reverted, green. It runs green on real Linux CI in 6s.
+- **Gate has two tiers, deliberately.** Tier 1 is the sprint's literal acceptance pattern; tier 2
+  adds the sibling repo names (`bounty-infra`, `global-bootstrap`, `scope-core`, `glunk-works`)
+  so a literal leaking in during Task 4/5 — when sessions are sitting *in* the pilot repo — is
+  caught before it ships. Scope is `skills/` and `agents/` only; `reference/` necessarily quotes
+  concrete values, which is what `project-schema.md`'s worked examples are.
+- **Verified, not assumed:** acceptance grep returns **zero** hits over `skills/` and `agents/`;
+  `claude plugin validate --strict` passes on both manifests; all 4 agent frontmatters
+  independently parsed as real YAML confirming `name`/`description`/`model`/`tools` survive the
+  folded block scalars (`coder.md`'s single-line `description:` is now `>-` too, so it no longer
+  depends on containing no mid-string `": "`).
+- **One self-inflicted scare worth not repeating: `git checkout -- <file>` to revert a *test*
+  violation also reverted the real work in that file.** Caught immediately (the file's tail was
+  the pre-generalization text) and rewritten, but the lesson is to inject a deliberate-failure
+  probe into a **scratch copy**, never into the file being edited. Separately, a CRLF alarm on
+  the committed shell scripts was chased and proved **false** — `od -c | grep -o '\r'` is not a
+  reliable CR count; `tr -cd '\r' | wc -c` against the raw bytes fetched from the GitHub contents
+  API showed **0**, and `git add --renormalize` agreed. No `.gitattributes` was needed and none
+  was committed.
+
+**Next action: start session 5 (Opus) — T4, adopt the plugin here.** Three files:
+`.ai/project.yml` (values verified against the **live** ruleset, not copied from the sprint plan
+or from `project-schema.md`'s example — the example was written from the plan), `.claude/settings.json`
+(marketplace pinned to the **`v0.2.0` tag**, `enabledPlugins`, the deny-list), and the slimmed
+`CLAUDE.md`. The sprint plan's § *Session plan* carries the verbatim kickoff prompt. `/clear`
+first. **This repo still has no `/resume`/`/handoff`** — until Task 4 lands, this file is the
+handoff protocol, run by hand: `/clear` between every session, and **every session ends by
 updating this file**. A session that ends without writing it strands the next one.
 
 **S1 merged 2026-07-22** ([#41](https://github.com/glunk-works/bounty-infra/pull/41), squash
@@ -686,6 +752,15 @@ Ran zizmor locally against `main` (post-#34) before touching anything: **46 find
   `MERGED`, branch fresh from `main` instead of pushing more commits to the dead branch.
   And before trusting this file's own "Now" section, or deleting any merged branch, run
   `git log origin/<branch> --not origin/main` to make sure nothing on it is still stranded.
+- **Never prove a gate red by breaking the file you are editing.** A guard is only trustworthy
+  once observed failing, so injecting a deliberate violation is right — but inject it into a
+  **scratch copy**, because the obvious way to undo it (`git checkout -- <file>`) reverts the file
+  to HEAD and silently takes your uncommitted real work with it. Hit in SW-T3b; caught only
+  because the reverted file's tail still read as the pre-edit version.
+- **`od -c | grep -o '\r'` is not a CR count.** It produced a confident false positive that the
+  repo's committed shell scripts were CRLF. Count raw bytes instead (`tr -cd '\r' | wc -c`), and
+  cross-check against what the host actually stores (the GitHub contents API) rather than against
+  a local `git show`/`cat-file`, which can pass through a platform's autocrlf filter.
 - Never commit to `main`, never merge your own PR, never force-push a pushed branch.
 - **A squash-merge makes SHA-absence meaningless as a stranded-commit test.** `git log
   origin/<branch> --not origin/main` and `git merge-base --is-ancestor` both report *every*
