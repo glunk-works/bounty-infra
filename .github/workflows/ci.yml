@@ -140,6 +140,42 @@ jobs:
           name: sbom
           path: src/sbom.json
 
+  # SG: secret-leak scan. Unchained like the other SG additions in this file (no
+  # `needs:` — a required check should report its own conclusion as fast as it can,
+  # and this job doesn't depend on lint/test having passed).
+  #
+  # gitleaks-action hardcodes `--redact` on every gitleaks invocation (confirmed by
+  # reading its src/gitleaks.js, not assumed from the README) — the job log, the
+  # SARIF artifact, and any PR comment it posts all omit the actual matched secret
+  # value; only rule id, file, line, and commit sha are ever shown. That is what
+  # makes it safe to run on a PUBLIC repo with no special handling: a real
+  # hardcoded secret fails this required check without re-broadcasting the secret
+  # itself into a world-readable log, comment, or artifact.
+  #
+  # No `pull-requests: write` added. The action's PR-review-comment step needs
+  # that scope and will 403 without it — but gitleaks.js catches that failure and
+  # logs a warning, it does not fail the job over it. The required check's
+  # pass/fail comes from the scan itself, and CLAUDE.md's narrowest-permission
+  # rule argues against granting a scope for a pure convenience path. This is the
+  # same choice loop-orchestrator's own secrets-scan job makes.
+  #
+  # GITLEAKS_LICENSE resolves from the glunk-works org secret (added 2026-07-21) —
+  # required for organization-owned repos regardless of visibility, free to obtain.
+  secrets-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history: gitleaks scans the base^..head commit range, which
+          # needs commits this PR's default shallow clone would not have.
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+          GITLEAKS_CONFIG: .gitleaks.toml
+
   # SG: workflow security scanner. Catches the injection class that was #6/T4 and
   # the artipacked/unpinned-uses classes fixed alongside it in this same change —
   # this is what turns "fixed once" into "can't regress." Runs unchained, like the
