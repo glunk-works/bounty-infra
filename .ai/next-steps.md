@@ -43,9 +43,15 @@ Plans: `sprints/S1_scanner_security_core/sprint_plan.md` and
 it (its IAM grant is a different story — see BI-D8's scope correction).
 
 **Two OPERATOR actions gate S1 actually working, neither of which a coder can do:**
-1. **The UA contact URL/email** (#32) — no default, and an unset contact is a deliberate startup
-   error so an anonymous scanner can't ship by accident. Must be real and reachable; its whole
-   purpose is giving an abuse desk somewhere to write.
+1. **The UA contact URL** (#32) — shape is locked as
+   `bounty-scanner/<version> (+<contact-url>)` (platform-neutral, plus an optional per-program
+   `identification` override in the RoE). **The contact value itself is still outstanding.** No
+   default, and an unset contact is a deliberate startup error so an anonymous scanner can't
+   ship by accident. Must be resolvable — an H1 profile URL is ideal, since it's
+   self-authenticating and shows a receiving SOC this is a real researcher.
+   *(`HackerOne-Research-Seuss` was proposed and rejected: no contact mechanism, no version, and
+   leading with a platform brand implies the traffic is HackerOne Inc.'s — wrong outright when
+   the program is a Bugcrowd one.)*
 2. **The RoE document itself** — a hand-authored JSON object in S3 holding real program scope.
    S1 ships the *mechanism*; until that object exists a fail-closed scanner correctly refuses to
    scan anything. **"S1 merged" and "scans work again" are two separate events.**

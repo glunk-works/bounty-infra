@@ -95,6 +95,10 @@ selection also strengthens BI-D7: the dispatcher now asserts *both* "this progra
 domain," and a **mismatch between the two hard-fails** — which is the single most likely
 real-world operator error this sprint can catch.
 
+`identification` is **optional** and per-program: it extends/overrides the global User-Agent for
+that program only (T4), falling back to the global default when absent. Programs that mandate a
+specific marker are then an **RoE edit, not a code change**.
+
 Shape (illustrative — T1 pins the real one):
 
 ```json
@@ -110,7 +114,11 @@ Shape (illustrative — T1 pins the real one):
           "eligible_for_submission": true },
         { "asset_type": "URL", "asset_identifier": "shop.acme.com",
           "eligible_for_submission": false }
-      ]
+      ],
+      "identification": {
+        "ua_suffix": "acme-vdp",
+        "headers": { "X-Bug-Bounty": "<handle>" }
+      }
     }
   }
 }
@@ -231,10 +239,27 @@ the system, and an H1 token can read programs and file reports.
 - **Task 4: Traffic attribution + rate limiting (#32)**
   - **Description:** An identifying **User-Agent** and conservative rate/concurrency limits on
     `httpx` and `nuclei`.
-  - **UA shape:** `bounty-scanner/<version> (+<CONTACT>)`. **`<CONTACT>` is operator-supplied
-    and has no default** — an unset contact is a **startup error**, so an anonymous scanner
-    cannot ship by accident. Its whole purpose is giving an abuse desk somewhere to write, so it
-    must be real and reachable. *(Owner action: supply the URL/email.)*
+  - **UA shape:** `bounty-scanner/<version> (+<CONTACT>)` — the established bot convention
+    (`+URL`, as Googlebot et al. use), with an RFC 9110 `product/version` token.
+    **`<CONTACT>` is operator-supplied and has no default** — an unset contact is a **startup
+    error**, so an anonymous scanner cannot ship by accident. It must be **resolvable**: its
+    whole purpose is giving an abuse desk somewhere to write instead of filing a complaint.
+    A HackerOne profile URL is ideal — self-authenticating, and it demonstrates to a receiving
+    SOC that this is a real researcher doing authorized testing.
+    *(⚠ Owner action, still outstanding: supply the handle/URL.)*
+  - **Platform-neutral by design — do NOT lead with a platform brand.** A UA in the shape
+    `HackerOne-…` was proposed and rejected: putting a platform's name in the product-token
+    position implies the traffic originates from **HackerOne Inc.**, which (a) creates a problem
+    with the platform if a target complains about traffic branded as theirs, and (b) is simply
+    wrong when the selected program is a **Bugcrowd** one — which BI-D9 supports in the same RoE
+    document. Identify *with* a platform via the contact URL; never identify *as* one.
+  - **Per-program override (BI-D9).** Some programs mandate a specific identifying header or UA
+    marker, and HackerOne surfaces that requirement in the structured-scope `instruction` field.
+    The RoE entry therefore carries an optional `identification` block (`ua_suffix`, `headers`)
+    that overrides/extends the global default for that program only, falling back to the global
+    UA when absent. This keeps a program-specific requirement an **RoE edit, not a code change**.
+    Treat `instruction` as third-party text — do not auto-parse it into headers; an operator
+    transcribes it into the `identification` block deliberately.
   - **Suggested defaults — conservative, and well under tool defaults:** rate limit **10 req/s**
     (both tools default to 150), concurrency **25**. Expose as CLI flags in the style of the
     existing `--severities`/`--timeout`.
