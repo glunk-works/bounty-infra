@@ -111,8 +111,46 @@ ruleset applied immediately → all content landed on a branch → PR → tag on
   requires — it will not *run* correctly yet (no `.ai/project.yml` schema consumer exists until
   Task 3), which the plan's acceptance text already anticipated.
 
-**Next action: start session 3 (Opus) — T3a, write `reference/project-schema.md` and generalize
-the 7 skills against it.** The sprint plan's § *Session plan* carries the verbatim kickoff prompt.
+**Task 3a done 2026-07-22 (Opus, session 3) — `reference/project-schema.md` written and all 7
+skills generalized against it.** PR: [claude-workbench#2](https://github.com/glunk-works/claude-workbench/pull/2)
+(`sprint/SW-t3a-schema-and-skills` → `main`), **open, `lint` green, unmerged**. **`v0.2.0` is
+deliberately NOT tagged** — the plan tags it at the end of session 4, after the agents.
+
+- **PR #1 had already been merged by the owner** by the time this session started, so `main`
+  carried the skeleton and T3a branched from it — the cursor's "PR open, unmerged" note above was
+  stale. `git log origin/docs/plugin-skeleton --not origin/main` reported 2 commits "missing," the
+  known squash-merge false positive; content on `main` confirmed complete before trusting it.
+- **The sprint plan's coupling inventory was wrong about `retro`.** It records `retro` as having
+  **none** and shipping verbatim. It has three: `docs/backlog.md`, `BL-` item ids, and a named
+  loop-orchestrator memory. The first two are structural — **bounty-infra has no backlog file at
+  all, it uses GitHub issues** — so this forced a schema key the plan's draft did not have:
+  `backlog: {kind: github_issues|file, path, item_prefix}`. `/retro` and `/archive-sprint` both
+  branch on `kind` and never assume a file exists. Provenance is recorded next to the key.
+- **Other keys added beyond the plan's draft**, each because a skill would otherwise name a
+  literal: `code_paths` (one definition of "is this diff docs-only," shared by `/critic-gate`,
+  `/pr-checks`, `/ship`, and the review gate's trigger — two definitions that can disagree
+  eventually will), and `decisions: {log, prefix}` (the plan had a bare `decision_prefix` with no
+  path). `review.ci_gate` gained an optional `triggers_on`, defaulting to `code_paths`.
+- **`review.ci_gate: null` verified clean through all 7**, which is the design's load-bearing
+  test: no skill emits a dangling instruction to post a review nobody requires, `/ship` no longer
+  claims exemption from a gate that does not exist, `/pr-checks` skips the stale-run heuristic
+  entirely, and `/critic-gate` instead states plainly that it is then the *only* critic look the
+  diff gets before the human's merge — a real behavioral difference worth saying out loud rather
+  than a silently-skipped branch.
+- **Some coupling was removed without a key**, which is the schema staying small on purpose:
+  commit/PR grammar now points at the plugin's own `reference/conventions.md` instead of being
+  restated in `/ship`; module boundaries for a commit scope are read from the consuming repo's
+  `CLAUDE.md` as local truth; label namespaces derive from `{repo}`.
+- **Verified, not assumed:** the acceptance grep returns **zero** hits over `skills/` (the
+  remaining hits are all in `agents/`, session 4's scope); `claude plugin validate --strict` passes
+  on both manifests; and all 7 frontmatters were independently parsed as YAML to confirm `name` +
+  `description` survive the folded block scalars — Task 2's silent frontmatter-drop bug was not
+  reintroduced. CI `lint` is green on the PR. Locally the three `jq`-dependent `lint.sh` checks
+  fail for want of `jq` on this machine; they cover manifest files T3a does not touch, and CI has it.
+
+**Next action: start session 4 (Opus) — T3b, generalize the 4 agents against the schema, add the
+grep gate as a CI job, tag `v0.2.0`.** The sprint plan's § *Session plan* carries the verbatim
+kickoff prompt; read `project-schema.md` from PR #2's branch (or `main`, if #2 has merged by then).
 `/clear` first. **This repo still has no `/resume`/`/handoff`** — until Task 4 lands, this file is
 the handoff protocol, run by hand: `/clear` between every session, and **every session ends by
 updating this file**. A session that ends without writing it strands the next one.
