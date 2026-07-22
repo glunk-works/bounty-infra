@@ -39,7 +39,16 @@ Plans: `sprints/S1_scanner_security_core/sprint_plan.md` and
 2. **S1 — #7 + #13 + #32** at the scanner boundary, consuming `scope-core`.
 
 **SE** remains independent and unblocked if you'd rather do it first — but S1 was chosen
-2026-07-22 and S1's design is deliberately substrate-neutral, so SE will not invalidate it.
+2026-07-22 and S1's *scanner code* is deliberately substrate-neutral, so SE will not invalidate
+it (its IAM grant is a different story — see BI-D8's scope correction).
+
+**Two OPERATOR actions gate S1 actually working, neither of which a coder can do:**
+1. **The UA contact URL/email** (#32) — no default, and an unset contact is a deliberate startup
+   error so an anonymous scanner can't ship by accident. Must be real and reachable; its whole
+   purpose is giving an abuse desk somewhere to write.
+2. **The RoE document itself** — a hand-authored JSON object in S3 holding real program scope.
+   S1 ships the *mechanism*; until that object exists a fail-closed scanner correctly refuses to
+   scan anything. **"S1 merged" and "scans work again" are two separate events.**
 
 **Do not start the IaC security scan or the container image scan** — both are SG gates still
 pending (not part of the four just closed above) that should follow SE (see the ordering note
@@ -274,6 +283,42 @@ us, in rough order of how much it changed the plan:
   API, which is exactly the kind of thing a reimplementation would have silently dropped.
 - **#32 folded into S1** — it lands on the same `run_recon_pipeline` argv the scope filter is
   being inserted into, so splitting it means reopening that function for a handful of flags.
+
+**Then the plan was critiqued hard and revised (same day) — 17 findings, several were real
+defects in the plan, not just ambiguity.** The ones worth carrying forward:
+
+- **The RoE was specified as if one program = one ruleset. It isn't.** Operator runs
+  **HackerOne + Bugcrowd**; only H1 has a researcher API. → **BI-D9**: normalized JSON keyed by
+  program handle, using H1's *vocabulary* but not its API envelope (Bugcrowd must share the
+  file), and a **required `--program` handle** so selection is explicit. Never search-all —
+  a typo would silently borrow another program's authorization.
+- **Verifying the H1 API surfaced a second out-of-scope source** — `scope_exclusions` is its own
+  endpoint, separate from `eligible_for_submission: false`. Using only the latter would scan
+  explicitly-excluded assets while believing we were compliant. **Verify vendor APIs; don't
+  model them from memory.**
+- **I had designed a parser-differential vulnerability.** `sanitize()` NFKC-normalizes, and NFKC
+  rewrites hostnames (fullwidth `ｅxample.com` → `example.com`). Validating one form while
+  scanning another is a validate/use mismatch. Invariant now explicit: **sanitize is
+  display-only; validate and scan the exact same bytes.**
+- **One enforcement point on a three-hop pipeline.** httpx→nuclei was unguarded; safe only
+  because `httpx` doesn't follow redirects *today*. Adding `-follow-redirects` later would
+  bypass scope with no test failing. Now three enforcement points.
+- **The file's house style is except-and-continue** (`scanner.py:129-134`, `271-272`) — the
+  exact opposite of BI-D8's fail-closed requirement. A coder pattern-matching the file would
+  have silently defeated it.
+- **`TriageReport` is Gemini's `response_schema`** — the obvious place to put the drop count
+  would have changed what the model is asked to emit. Metadata goes to its own S3 artifact.
+- **The distribution mechanism could have blocked every merge.** `dependency-audit` and `sbom`
+  both scan the *installed environment* (deliberately not `skip-install`), and both became
+  required 2026-07-22. A GitHub-tarball dep is unknown to both → **smoke-test in a scratch venv
+  before committing to it.**
+- **`git+https://` would break the image build** — only the Go builder stage installs `git`
+  (`Dockerfile:3`); the runtime stage running `pip install .` has none. Tarball URL, not git URL.
+- **Wildcard→regex is the sharpest risk in S1**: `re.escape` the literal, **anchor both ends**
+  (scope-core uses `re.search`), apex excluded by default. Under-inclusive is safe;
+  over-inclusive is unauthorized scanning.
+- **Corrected an overclaim:** "S1 survives BI-D5 untouched" is true of the scanner code, **not**
+  the IAM grant — that attaches to a Fargate role BI-D5 retires.
 
 ## Just done (2026-07-22) — required-checks catch-up, PR #37
 

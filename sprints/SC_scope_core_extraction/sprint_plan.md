@@ -100,6 +100,12 @@ safety invariant, in one place, is the point. Convenience is secondary.
     loop-orchestrator keeps its own copy would *create* the two-divergent-definitions failure
     mode this pass exists to prevent, at the cost of an extra repo. If Task 2 does not land,
     Task 1 is a net negative.
+  - **loop-orchestrator's own Definition of Done applies, and it is heavier than this repo's.**
+    Its sprint-45 record states that a change touching `src/` requires a **fresh-session
+    `architect-review`** (its P0-D16) plus a `/critic-gate` pass. Deleting
+    `src/loop_orchestrator/tools/**` is exactly such a change, so budget that review — this
+    task is slower than its diff suggests. Read that repo's `CLAUDE.md` before opening the PR
+    rather than assuming bounty-infra's bar transfers.
   - **Target Files:** loop-orchestrator `pyproject.toml`, `src/loop_orchestrator/tools/**`,
     `tests/tools/**`, and its `docs/bounty_loop_architecture.md` §5/§10 + sprint-45 record
     (which currently describe the primitives as living there).
@@ -114,14 +120,32 @@ publishing to PyPI. Rationale:
 - It matches this org's demonstrated discipline exactly — every GitHub Action here is
   SHA-pinned for the same reason (a mutable tag is a handoff to whoever moves it).
 - **No release infrastructure to build**, which is what keeps this pass short.
-- A **tarball URL, not `git+https://`** — pip installs it without a `git` binary present, so
-  `src/Dockerfile`'s build stage needs no new package. (`git+https://` would require adding
-  `git` to the image just to resolve a dependency.)
+- A **tarball URL, not `git+https://`** — **verified, not assumed**: only the Go builder stage
+  installs `git` (`src/Dockerfile:3`); the `python:3.14-slim` runtime stage that runs
+  `pip install .` (`src/Dockerfile:29`) has no `git` binary. A `git+https://` dependency would
+  fail the image build outright. Do not "simplify" the tarball URL to a git URL later.
 - **Known consequence:** a project with a direct-reference dependency cannot itself be
   uploaded to PyPI. Neither consumer publishes to PyPI today — bounty-infra's `package` job
   runs `hatch build` for the container image, not for an index — so this costs nothing now.
-  **If either repo ever needs to publish, this decision has to be revisited first**, and that
-  is the one thing that would force a real PyPI release process for `scope-core`.
+  **If either repo ever needs to publish, this decision has to be revisited first.**
+
+> **⚠ Smoke-test the mechanism BEFORE committing to it — it can block every merge.**
+> `dependency-audit` (pip-audit) and `sbom` (cyclonedx-py) **both scan the installed
+> environment**, deliberately not `skip-install` — `src/pyproject.toml` says so in comments.
+> A direct-reference dependency that does not exist on PyPI is an unknown to both tools, and
+> **both became required checks on 2026-07-22**. If either errors rather than warns, SC lands
+> and every subsequent bounty-infra PR is unmergeable. Install the tarball dep into a scratch
+> venv and run `pip-audit --skip-editable` + `cyclonedx-py environment` against it **first**.
+> If either breaks, fall back to PyPI publication (adds a release workflow to Task 1) rather
+> than suppressing the gate.
+
+**Version floors — specify them, do not inherit by accident.** `scope-core` uses pydantic-v2-only
+APIs (`model_validator(mode="after")`, `ConfigDict`, `PrivateAttr`) and PEP 585/604 syntax under
+`from __future__ import annotations`. Consumers: bounty-infra declares
+`requires-python = ">=3.11"` with `pydantic>=2.0.0` and a **3.14** runtime image, while its CI
+validates on 3.11 (the known #16 drift). Declare a floor that satisfies both consumers and is
+tested at both ends of that range, or the shared package becomes the thing that breaks an
+install nobody changed.
 
 **Security Considerations:** This pass moves security-critical code without changing it, so the
 dominant risk is **silent semantic drift during the move** — a subtly different regex mode, a

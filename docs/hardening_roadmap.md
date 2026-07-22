@@ -59,7 +59,7 @@ the wrapper (loop-orchestrator S47-D12; comments on #7/#13).
 |---|---|---|
 | **S0 — Governance & CI/CD hardening** | #6, #8, #9, #10 | Branch-protection ruleset + minimal working method; gated OpenTofu deploy (plan-on-PR + apply-on-merge, `production` Environment approval); non-bypassable CI on all paths; `run-scan.yml` injection fix + drop unused `GITHUB_TOKEN`. **Also unblocks loop-orchestrator S47's #18** (same file as #6). |
 | **SC — `scope-core` extraction** (BI-D6) | new | **Prerequisite for S1.** Extract loop-orchestrator's scope validator + ingestion sanitizer into `glunk-works/scope-core` and re-point loop-orchestrator at it (deleting its local copies). Cross-repo; touches no bounty-infra `src/`. Cheapest now — those primitives still have zero live consumers. `sprints/SC_scope_core_extraction/sprint_plan.md`. |
-| **S1 — Scanner security core** | #7, #13, **#32** | Structural scope check **consumed from `scope-core`** (BI-D6), enforced at two tiers (BI-D7) with the RoE fetched from S3 (BI-D8); triage-prompt hardening (fence + sanitize target-derived fields; triage advisory-only); scanner traffic attribution + rate limiting. **#32 joins S1** — it lands on the same `run_recon_pipeline` argv the scope filter is inserted into, and is thematically one change with #7. Planned 2026-07-22: `sprints/S1_scanner_security_core/sprint_plan.md`. |
+| **S1 — Scanner security core** | #7, #13, **#32** | Structural scope check **consumed from `scope-core`** (BI-D6), enforced at **three** points — input gate, discovered-set filter, pre-nuclei revalidation (BI-D7) — over a HackerOne-vocabulary RoE fetched from S3 (BI-D8/D9); triage-prompt hardening (fence + sanitize target-derived fields; triage advisory-only); scanner traffic attribution + rate limiting. **#32 joins S1** — it lands on the same `run_recon_pipeline` argv the scope filter is inserted into, and is thematically one change with #7. Planned 2026-07-22: `sprints/S1_scanner_security_core/sprint_plan.md`. |
 | **S2 — Scanner robustness** | #11, #12, #14 | Tighten task-role IAM to what's used; pin tools/templates/deps (reproducible builds); distinguish partial/failed scans from clean success. **#11 is re-scoped by BI-D5** — the Fargate task role it targets is being retired; re-point at the replacement credential path. |
 | **SG — CI gate expansion** | new | Adopt the four shared gates (`secrets-scan`/gitleaks, `dependency-audit`, `sbom`, `pr-title`) + **`zizmor`** (workflow security — detects the template-injection class that was #6, converting T4's fix from done-once into can't-regress) + container image scan (trivy/grype) + IaC security scan (checkov/trivy-config; `tflint` lints, it does not scan). |
 | **SE — Egress migration (BI-D5)** | new | Retire ECS/VPC/ECR from `infra/**`; per-scan ephemeral VM on Vultr with a reserved IP; re-point `run-scan.yml` at the new launcher; credential path for S3 write; provider abuse-team notification. |
@@ -283,6 +283,40 @@ exist and claims "least privilege IAM" that #11 contradicts — fold into a docs
     `aws ecs describe-task-definition`. *`--scope-file` + launcher materializes it* — clean
     scanner-side seam, but on Fargate the file still arrives via env-then-write, inheriting the
     same exposure and adding a layer.)
+  - **Scope correction (2026-07-22):** "S1 survives BI-D5 untouched" holds for the **scanner
+    code**, not the credential path. The `s3:GetObject`/`kms:Decrypt` grant attaches to a
+    Fargate task role BI-D5 **retires**, so SE re-points it. Do not read BI-D8 as substrate-free.
+- **BI-D9 (2026-07-22) — the RoE document: HackerOne's vocabulary, our normalized schema,
+  program-keyed, with explicit program selection.** The operator runs programs on **HackerOne
+  and Bugcrowd**; only HackerOne has a researcher-facing API. Bugcrowd programs are therefore
+  hand-authored and share the same document, so the schema adopts H1's **vocabulary**
+  (`asset_type`, `asset_identifier`, `eligible_for_submission`) **without coupling to its API
+  envelope** — a vendor shape no second platform will ever match. Format is **JSON**, not YAML
+  (YAML means adding PyYAML, a new supply-chain dependency while #12 is open).
+  - **Explicit program selection, never search-all.** `run-scan.yml` gains a required `program`
+    input; the scanner validates `target_domain` against **that program's rules only**. Two
+    programs matching one domain is ambiguous, and a typo would silently borrow a different
+    program's authorization. This strengthens BI-D7: the dispatcher asserts *both* "this
+    program" and "this domain," and a **mismatch between them hard-fails** — the most likely
+    real-world operator error S1 can catch.
+  - **Two independent out-of-scope sources, verified against the live API 2026-07-22:**
+    `structured_scopes` entries with `eligible_for_submission: false`, **and** a separate
+    `GET /hackers/programs/{handle}/scope_exclusions` endpoint. Both must map to
+    `out_of_scope_regex`; missing the second means scanning explicitly-excluded assets while
+    believing we are compliant.
+  - **`asset_type` is an allowlist** (`URL`, `WILDCARD`), not a blocklist. H1 does not publish an
+    enumerated list, so allowlisting makes any type added later default to **not scanned**
+    rather than being fed to `subfinder` as if it were a hostname. CIDR/IP assets are excluded —
+    `scope-core` decides on regexes and this pipeline is domain-driven.
+  - **Wildcard translation is the sharpest risk in S1**: `re.escape` the literal part, **anchor
+    both ends** (`scope-core` uses `re.search`, so unanchored patterns match
+    `evil.example.com.attacker.net`), and treat the **apex as excluded by default** — a missed
+    finding costs nothing, an over-inclusive pattern is unauthorized scanning.
+  - **The H1 token never reaches the scan VM.** It is consumed only by the (deferred) sync job
+    in Actions with an Infisical-sourced credential — same argument that rejected
+    Infisical-on-VM in BI-D8. **S1 ships enforcement against a hand-authored document**;
+    automating the pull is a follow-on task, so the schema is validated by hand against a real
+    program before any sync code is written against it.
 
 ## Cross-repo coupling
 
