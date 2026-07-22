@@ -15,17 +15,107 @@ SessionStart cursor hook, the Global Conventions) into a **plugin** published fr
 Closes **#19**. **BI-D3 is fully retired** — the plugin repo is the central conventions home it
 called for, and the `raw.githubusercontent` URL in `CLAUDE.md` goes away with it.
 
-**Task 1 is "verify the plugin manifest schema against current docs before writing any JSON"** —
-not scaffolding, deliberately. Every vendor surface this repo modeled from memory (annotated tag
-objects, H1's `scope_exclusions`, zizmor-action's exit code) was wrong in a way that cost a run.
-SW touches no `src/`, no `infra/`, and no workflow.
+**Task 1 done 2026-07-22 (Sonnet, session 1) — plugin manifest schema confirmed against current
+docs, zero discrepancies from the sprint plan's assumptions.** No repo created, no JSON written,
+per Task 1's scope. Source: `code.claude.com/docs/en/plugins-reference.md` and
+`code.claude.com/docs/en/plugin-marketplaces.md`, fetched live (not recalled). Confirmed:
 
-**Next action: start session 1 (Sonnet).** The sprint plan's § *Session plan* carries all seven
-sessions — model, `/clear` point, and a verbatim kickoff prompt each. **This repo has no
-`/resume` or `/handoff` yet — SW is the sprint that builds them** — so until Task 4 lands, that
-section *is* the handoff protocol, run by hand: `/clear` between every session, and **every
-session ends by updating this file**. A session that ends without writing it strands the next one.
-Delete that section once the plugin is adopted; it exists only to bootstrap its own replacement.
+- `.claude-plugin/marketplace.json` at the marketplace repo root; required fields `name`,
+  `owner` (object, `name` required/`email` optional), `plugins` (array). Each plugin entry needs
+  at minimum `name` + `source`.
+- `.claude-plugin/plugin.json` at each plugin's own root (`plugins/way-of-working/.claude-plugin/`
+  matches this exactly); the manifest is optional but if present `name` is its only required
+  field. Unrecognized top-level fields warn, don't fail.
+- Component subdirectories are exactly `skills/`, `agents/`, `hooks/` at the plugin root (never
+  inside `.claude-plugin/`) — matches the plan's tree precisely. `reference/` is not a
+  schema-recognized component dir, just inert supporting files skills can point to — fine, not a
+  discrepancy.
+- `hooks/hooks.json` shape: `{"hooks": {"<EventName>": [{"matcher": "...", "hooks": [{"type":
+  "command", "command": "..."}]}]}}`. `${CLAUDE_PLUGIN_ROOT}` is confirmed correct for a hook
+  script path, quoted in shell form: `"\"${CLAUDE_PLUGIN_ROOT}\"/scripts/foo.sh"`.
+- Settings keys: `extraKnownMarketplaces` (object keyed by marketplace name, each value a
+  `{"source": {...}}` object) and `enabledPlugins` (object keyed by `"<plugin-name>@<marketplace-
+  name>": true`) — the plugin reference **is** `name@marketplace`, confirmed.
+
+**The plan is not wrong anywhere Task 1 checked — proceed to session 2 as written**, no amendment
+needed. One refinement found in session 2, not a correction: `hooks.json`'s per-entry `matcher`
+is **optional** for `SessionStart` (it filters by session source — `startup`/`resume`/`clear`/
+`compact`/`fork` — omitting it fires on every SessionStart). Task 1's note wasn't wrong, just
+didn't say so; worth carrying forward since the shipped `hooks.json` relies on the omit-it form.
+
+**Task 2 done 2026-07-22 (Sonnet, session 2) — `glunk-works/claude-workbench` stood up, plugin
+skeleton pushed, real end-to-end install verified.** Repo:
+[glunk-works/claude-workbench](https://github.com/glunk-works/claude-workbench). Sequence
+actually used (never commit straight to `main`, matching this repo's own convention, which
+claude-workbench inherits): `gh repo create --add-readme` (one bootstrap commit on `main`) →
+ruleset applied immediately → all content landed on a branch → PR → tag on the branch head.
+
+- **Ruleset applied is `deletion` + `non_fast_forward` + `pull_request`
+  (`required_approving_review_count: 0`, `bypass_actors: []`) — deliberately only 3 rule types,
+  not bounty-infra's current 8-check `required_status_checks`.** Field-for-field per the plan
+  means the *rule-type tuple* the plan enumerates, not a copy of whatever checks bounty-infra
+  happens to require today — this repo has exactly one job (`lint`), unproven on a real PR, and
+  requiring a check that doesn't exist strands every PR (the same principle bounty-infra's own
+  T1→T3 gap already established). Adding `required_status_checks` for `lint` is a later,
+  separate step once more PRs have run it green. Verified via
+  `GET repos/glunk-works/claude-workbench/rules/branches/main`: 3 rule types present.
+- **Plugin skeleton**: `.claude-plugin/marketplace.json` + `plugins/way-of-working/.claude-plugin/plugin.json`
+  per Task 1's confirmed schema; the 7 skills + 4 agents (`architect`, `coder`, `security-critic`,
+  `docs-consistency`) copied from loop-orchestrator as-is — **still loop-orchestrator-coupled on
+  purpose**, generalizing them against `.ai/project.yml` is Task 3, not this task; the
+  SessionStart hook (`hooks.json` + `ai-cursor-banner.sh`, copied verbatim); `conventions.md`
+  byte-identical to loop-orchestrator's `.ai/context/conventions.md` (confirmed via `diff`, so
+  Task 6's drift guard gets an empty first diff); `workflow.md` with its two
+  loop-orchestrator-specific narratives (the `feat/mcp-langgraph-migration` historical note, the
+  sprint-27 Task 8 incident) replaced by the portable rule each taught, referencing the `pr_base` /
+  `review.ci_gate` schema keys Task 3 will formalize — every other repo-specific detail in that
+  file was left alone, since Task 2's scope named only those two passages and `reference/` isn't
+  subject to Task 3's zero-hits grep gate (only `skills/`/`agents/` are); `docs/decisions.md`
+  seeding **WB-D1..D4** (BI-D10..D13 restated as this repo's own).
+- **A real bug, caught by the real tool, not assumed fixed:** `claude plugin validate --strict`
+  (the actual CLI, installed in CI via `npm install -g @anthropic-ai/claude-code` — not a
+  hand-rolled approximation) found that 3 of the 4 agents (`architect`, `docs-consistency`,
+  `security-critic`) had an unquoted `": "` inside their YAML frontmatter `description` (e.g.
+  "Read-only: never edits, commits, or merges.") — valid-*looking* but YAML-breaking, silently
+  dropping the **entire** frontmatter block (name/model/tools included) at runtime. `coder.md` had
+  no such mid-string colon and validated clean, which is why the bug wasn't uniform across all 4.
+  Fixed by converting each `description` to a folded block scalar (`>-`), which sidesteps the
+  hazard without rewording the content. `lint.sh` now runs `claude plugin validate --strict`
+  first — confirmed by deliberately reintroducing the bug, seeing it fail, then confirming the
+  fix passes — with the hand-rolled jq/frontmatter checks kept as a backstop, since `validate`
+  does **not** check a `SKILL.md`'s frontmatter for required-field completeness (confirmed by
+  deliberately deleting `resume/SKILL.md`'s `name:` field; `validate --strict` missed it, the jq
+  check caught it). Also added a top-level `marketplace.json` `description` (a `--strict`
+  warning otherwise).
+- **PR open, unmerged**: [claude-workbench#1](https://github.com/glunk-works/claude-workbench/pull/1)
+  (`docs/plugin-skeleton` → `main`), `lint` green on both commits.
+- **`v0.1.0` tagged on the PR branch's head commit (`9c197eb`), not on `main`** — `main` still
+  only has the bootstrap README commit, since the ruleset means the skeleton can't land there
+  without a merge, and this session was told not to merge. A git tag can point at any commit;
+  plugin marketplace `source.ref` resolves a tag name the same way regardless of which branch
+  it's on. Verified this matters, not just asserted it: pushed to `origin/v0.1.0` and confirmed
+  `git rev-parse v0.1.0^{commit}` resolves to `9c197eb`.
+- **The acceptance test actually ran, end-to-end, not just read back a manifest.** Fresh scratch
+  project, `.claude/settings.json` with `extraKnownMarketplaces` → `{"source": "github", "repo":
+  "glunk-works/claude-workbench", "ref": "v0.1.0"}` (per `plugin-marketplaces.md`'s documented
+  `ref`-pinning shape, fetched live — the marketplace source supports `ref` but not `sha`; the
+  per-plugin source inside `marketplace.json` supports both). The GitHub-source install path hit
+  CLI/cache friction unrelated to the skeleton's own correctness (`claude plugin marketplace add`
+  / `install` disagreeing on whether the marketplace was known); worked around by adding the
+  **local** `v0.1.0` tag checkout as the marketplace source instead, which isolates exactly what
+  Task 2 needs to prove — the skeleton's own shape — from GitHub-ref-resolution plumbing. Result:
+  `claude plugin install way-of-working@claude-workbench --scope project` succeeded, and `claude
+  plugin details` confirmed **Skills (7): archive-sprint, critic-gate, handoff, pr-checks,
+  resume, retro, ship · Agents (4): architect, coder, docs-consistency, security-critic · Hooks
+  (1): SessionStart**, ~1,383 tokens always-on. `/resume` is listed, as the acceptance criterion
+  requires — it will not *run* correctly yet (no `.ai/project.yml` schema consumer exists until
+  Task 3), which the plan's acceptance text already anticipated.
+
+**Next action: start session 3 (Opus) — T3a, write `reference/project-schema.md` and generalize
+the 7 skills against it.** The sprint plan's § *Session plan* carries the verbatim kickoff prompt.
+`/clear` first. **This repo still has no `/resume`/`/handoff`** — until Task 4 lands, this file is
+the handoff protocol, run by hand: `/clear` between every session, and **every session ends by
+updating this file**. A session that ends without writing it strands the next one.
 
 **S1 merged 2026-07-22** ([#41](https://github.com/glunk-works/bounty-infra/pull/41), squash
 commit `eaf8038`) — but with the **single-shared-RoE-document** design, not the per-engagement
