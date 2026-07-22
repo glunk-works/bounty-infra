@@ -6,6 +6,20 @@ Regenerate this at the end of every working session.
 
 ## Now
 
+**S1 merged 2026-07-22** ([#41](https://github.com/glunk-works/bounty-infra/pull/41), squash
+commit `eaf8038`) — but with the **single-shared-RoE-document** design, not the per-engagement
+revision below. **A stranded-commit incident happened during this session, recovered.** The
+per-engagement revision (owner-flagged, see the S1 narrative further down) was pushed to #41's
+branch, but #41 had already merged by the time the push landed — this repo's own recurring
+"push after merge" gotcha (Gotchas section below), now hit a fourth time. Recovered the same
+way as every prior instance: confirmed via `git merge-base --is-ancestor` + a content diff that
+`main` genuinely lacked the revision (not just a squash-SHA false alarm), branched fresh from
+`main`, cherry-picked the one stranded commit cleanly, re-verified green, and opened
+**[#42](https://github.com/glunk-works/bounty-infra/pull/42)** — open, awaiting CI + human merge.
+**The dead branch `sprint/S1-scanner-security-core` still exists remotely with that one commit
+on it** (not force-deleted by this session — nothing else worth preserving is on it, confirmed by
+the cherry-pick, but deleting a branch wasn't this session's call to make unprompted).
+
 **S0 closed** (#6, #8, #9, #10 all remediated and behaviorally verified). **The compute-model
 architecture pass is also done — BI-D5 is locked** (2026-07-21): scan egress leaves AWS for
 per-scan ephemeral VMs on **Vultr**; AWS keeps the control plane. See
@@ -45,15 +59,15 @@ direct-reference dependency present unless `tool.hatch.metadata.allow-direct-ref
 is set — the SC smoke test (pip-audit/cyclonedx-py) didn't cover this failure mode; both repos'
 `pyproject.toml` now carry it.
 
-**S1 — code written, locally green, PR not yet opened at cursor-write time.** New
-`src/bounty_scanner/roe.py` (RoE load/select/translate, Tasks 1–2); `scanner.py` mounts
-enforcement at three points, UA + rate-limiting, and triage-prompt sanitize+fence (Tasks 3–5);
-`run-scan.yml` gained a required `program` input and passes `--program`/`--scope-uri`/
-`--contact-url` through the existing `jq -n --arg` pattern. 58 tests green (`test_roe.py` new,
-`test_scanner.py` migrated to real `tmp_path` I/O per the plan's own note — mocking `open`
-couldn't assert on filtered-file *content*, which is the actual scope-enforcement behavior worth
-testing), `lint:check` clean, `hatch build` + wheel-install verified, and `dependency-audit`/
-`sbom` re-run against the real (not synthetic) `scope-core` dependency — both still clean.
+**S1 — [bounty-infra#41](https://github.com/glunk-works/bounty-infra/pull/41) open, all 10
+checks green, awaiting human merge.** New `src/bounty_scanner/roe.py` (RoE load/translate, Tasks
+1–2); `scanner.py` mounts enforcement at three points, UA + rate-limiting, and triage-prompt
+sanitize+fence (Tasks 3–5); `run-scan.yml` gained a required `program` input. 72 tests green
+(`test_roe.py` new, `test_scanner.py` migrated to real `tmp_path` I/O per the plan's own note —
+mocking `open` couldn't assert on filtered-file *content*, the actual scope-enforcement behavior
+worth testing), `lint:check` clean, `hatch build` + wheel-install verified, `dependency-audit`/
+`sbom` re-run against the real (not synthetic) `scope-core` dependency — both clean, and `zizmor`
+confirmed the `run-scan.yml` edits stayed injection-safe.
 
 **One real, verified-against-source finding from Task 4, not just implemented from the spec:**
 nuclei v3.11.0's own template-header application is an **unconditional** map assignment that
@@ -65,30 +79,33 @@ yields to the CLI flag). Confirmed by reading `pkg/protocols/http/build_request.
 repo — templates are unpinned third-party content (`src/Dockerfile`) — documented in code and
 here rather than silently claimed as airtight.
 
-**The sprint plan's IAM-grant claim was wrong — checked, not assumed, and no PR is needed.**
-The plan said "S1's `s3:GetObject`/`kms:Decrypt` grant lives in `global-bootstrap`," extrapolated
-from the T2 (OIDC role)/T4 (`ecs:DescribeTasks`) precedents — but those were both about the
-**GitHub Actions CI role** (`aws_iam_role.github_actions_role["bounty-infra"]`, defined in
+**The sprint plan's IAM-grant claim was wrong — checked, not assumed, and no `global-bootstrap`
+PR was needed.** The plan said "S1's `s3:GetObject`/`kms:Decrypt` grant lives in
+`global-bootstrap`," extrapolated from the T2 (OIDC role)/T4 (`ecs:DescribeTasks`) precedents —
+but those were both about the **GitHub Actions CI role**
+(`aws_iam_role.github_actions_role["bounty-infra"]`, defined in
 `global-bootstrap/project_policies.tf`). The RoE grant is a different principal entirely: the
 **ECS task role** the scanner container assumes at runtime (`aws_iam_role.task_role`,
 `infra/main.tf:97`), which already carries `s3:GetObject`+`kms:Decrypt` on the **whole findings
-bucket** (`arn:aws:s3:::${var.findings_bucket_name}/*`, bucket-wide, no prefix restriction) via
-the existing `s3_write_policy` — because that role already reads/writes findings there.
-`global-bootstrap` owns the bucket + KMS key (`aws_s3_bucket.findings_bucket` /
-`aws_kms_key.findings_key`, outputs `findings_bucket_name`/`findings_kms_key_arn`), but grants
-access to neither role from there.
-**Conclusion: store the RoE object in the SAME findings bucket** (convention:
-`roe/scope.json`) and **no IAM change is needed anywhere** — not `global-bootstrap`, and not
-`infra/main.tf` either (which BI-D5 freezes anyway, so this is also the change that respects
-that freeze rather than needing an exception to it). `ROE_SCOPE_URI` becomes
-`s3://<findings-bucket-name>/roe/scope.json`.
+bucket** via the existing `s3_write_policy`. `global-bootstrap` owns the bucket + KMS key but
+grants access to neither role from there. Storing the RoE inside that same bucket needs no IAM
+change anywhere — not `global-bootstrap`, and not `infra/main.tf` (which BI-D5 freezes anyway).
 
-**One NEW operator/cross-repo gate remains, from the corrected picture above:**
-
-1. **Infisical needs a new secret.** `ROE_SCOPE_URI` (BI-D8: Infisical holds the pointer, never
-   the scan VM), value `s3://<findings-bucket-name>/roe/scope.json` per the correction above,
-   must be added to `/bounty-infra` (prod) before `run-scan.yml` can dispatch a scan. Not yet
-   added — this session has no Infisical write access.
+**Second revision, same day, prompted by the owner: one RoE object PER ENGAGEMENT, not one
+shared document.** Originally the whole RoE lived in one `s3://.../roe/scope.json` holding a
+`programs: {handle: {...}}` map. The owner flagged the real operational risk directly: multiple
+engagements need genuinely separate RoE, and a shared file means one bad hand-edit denies scans
+for every engagement, not just the one being touched. Revised (roadmap BI-D9 now carries the
+full record): **`s3://<findings-bucket>/roe/<program>/scope.json`, one object per engagement**,
+each file *is* the program document (no wrapping map). This also **eliminated the `ROE_SCOPE_URI`
+Infisical secret** the first revision needed — `--scope-uri` now derives from `--program` +
+`$S3_BUCKET_NAME` (which the scanner already has), with an explicit override still available for
+an unusual layout. A new self-consistency check (the file's own `handle` must match the
+requested `--program`) guards against a misnamed prefix silently applying the wrong engagement's
+rules. `--program` now also gets a structural handle-shape validation (both in `roe.py` and a new
+`run-scan.yml` step mirroring `Validate target_domain`) since it participates in an S3 key now,
+not just a dict lookup. **No operator/cross-repo gate remains from the IAM or Infisical side** —
+the only thing still gating an end-to-end scan is the RoE content itself (below).
 
 **One OPERATOR action still gates S1 actually working end-to-end, unchanged from the planning
 pass, and a coder cannot do it:**
@@ -101,11 +118,11 @@ pass, and a coder cannot do it:**
    `https://hackerone.com/seuss` resolves. It could not be verified programmatically (H1
    profiles are JS-rendered, so a fetch returns only the shell). A contact URL that 404s is
    **worse than no contact** — it reads as a forged attempt at looking legitimate.
-1. **The RoE document itself — the one still outstanding.** A hand-authored JSON object in S3
-   holding real program scope (BI-D9), for both the HackerOne and Bugcrowd programs. S1 ships
-   the *mechanism*; until that object exists (and `ROE_SCOPE_URI` above points at it) a
-   fail-closed scanner correctly refuses to scan anything — right behavior, but **"S1 merged"
-   and "scans work again" are two separate events.**
+1. **The RoE documents themselves — the one still outstanding.** Hand-authored JSON, one object
+   per engagement now (per the revision above): `s3://<findings-bucket>/roe/<program>/scope.json`
+   for each of the HackerOne and Bugcrowd programs. S1 ships the *mechanism*; until those objects
+   exist a fail-closed scanner correctly refuses to scan anything — right behavior, but **"S1
+   merged" and "scans work again" are two separate events.**
 
 **Do not start the IaC security scan or the container image scan** — both are SG gates still
 pending (not part of the four just closed above) that should follow SE (see the ordering note
