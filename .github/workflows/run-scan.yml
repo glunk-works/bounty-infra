@@ -87,6 +87,21 @@ jobs:
             exit 1
           fi
 
+      - name: Validate program handle
+        env:
+          PROGRAM: ${{ inputs.program }}
+        run: |
+          set -euo pipefail
+          # Structural gate only, matching roe.py's own validate_program_handle
+          # (S1, BI-D9 revision) -- the handle now participates in an S3 key
+          # (roe/<program>/scope.json), so reject anything outside a
+          # conservative shape before it ever reaches AWS.
+          handle_re='^[A-Za-z0-9][A-Za-z0-9_-]*$'
+          if ! [[ "$PROGRAM" =~ $handle_re ]]; then
+            echo "::error::program '$PROGRAM' is not a valid handle (expected alphanumeric, '-', '_' only)"
+            exit 1
+          fi
+
       - name: Trigger Scan Task & Wait for Completion
         env:
           TARGET_DOMAIN: ${{ inputs.target_domain }}
@@ -94,13 +109,6 @@ jobs:
           SEVERITIES: ${{ inputs.severities }}
           SCAN_TIMEOUT: ${{ inputs.timeout }}
           MAX_FINDINGS: ${{ inputs.max_findings }}
-          # S1: the RoE object's S3 pointer is account-specific config, not a
-          # workflow_dispatch input -- Infisical-sourced (BI-D8), same as
-          # TF_STATE_BUCKET etc above (read as a plain shell var below, not
-          # `${{ env.X }}` -- Infisical's action injects it into the process
-          # environment for this job, not the Actions `env` expression
-          # context). Add ROE_SCOPE_URI to Infisical (/bounty-infra, prod)
-          # before this workflow can dispatch a scan.
           # Locked shape (BI-D9/#32, .ai/next-steps.md): platform-neutral,
           # `+URL` bot convention. Not a secret -- already public in this
           # repo's own docs -- so it is a literal here, not Infisical-sourced.
@@ -109,13 +117,16 @@ jobs:
           set -euo pipefail
           echo "Triggering scan for $TARGET_DOMAIN (program: $PROGRAM)..."
 
+          # No --scope-uri here: the scanner derives roe/<program>/scope.json
+          # from $S3_BUCKET_NAME, which is already baked into the task
+          # definition's own environment (infra/main.tf) -- not something
+          # this workflow needs to know or pass down (BI-D9 revision, S1).
           OVERRIDES=$(jq -n \
             --arg domain "$TARGET_DOMAIN" \
             --arg program "$PROGRAM" \
             --arg severities "$SEVERITIES" \
             --arg timeout "$SCAN_TIMEOUT" \
             --arg max_findings "$MAX_FINDINGS" \
-            --arg scope_uri "$ROE_SCOPE_URI" \
             --arg contact_url "$CONTACT_URL" \
             '{
               containerOverrides: [
@@ -129,7 +140,6 @@ jobs:
                   command: [
                     $domain,
                     "--program", $program,
-                    "--scope-uri", $scope_uri,
                     "--contact-url", $contact_url,
                     "--severities", $severities,
                     "--timeout", $timeout,

@@ -567,8 +567,10 @@ def main():
     )
     parser.add_argument(
         "--scope-uri",
-        default=os.environ.get("ROE_SCOPE_URI"),
-        help="s3://bucket/key URI of the RoE document (default: $ROE_SCOPE_URI).",
+        default=None,
+        help="s3://bucket/key URI of this engagement's RoE document. Default: derived from "
+        "--program and $S3_BUCKET_NAME (s3://<bucket>/roe/<program>/scope.json) -- override "
+        "only for an unusual layout.",
     )
     parser.add_argument(
         "--contact-url",
@@ -612,14 +614,22 @@ def main():
     # S1 Task 1: fail-closed RoE load, BEFORE any temp file is created or
     # subprocess runs. roe.py does not follow this file's
     # except-and-continue house style -- every failure mode here is fatal.
-    if not args.scope_uri:
+    # No --scope-uri given ⇒ derive the per-engagement default
+    # (roe/<program>/scope.json) from $S3_BUCKET_NAME, the same env var the
+    # scanner already uses to upload findings -- no separate RoE-pointer
+    # secret needed.
+    bucket_name = os.environ.get("S3_BUCKET_NAME")
+    if not args.scope_uri and not bucket_name:
         logger.error(
-            "No --scope-uri given and $ROE_SCOPE_URI is unset. Refusing to scan."
+            "No --scope-uri given and $S3_BUCKET_NAME is unset -- cannot derive the RoE "
+            "location. Refusing to scan."
         )
         sys.exit(1)
 
     try:
-        program_scope = load_program_scope(args.scope_uri, args.program)
+        program_scope = load_program_scope(
+            args.program, bucket=bucket_name, scope_uri=args.scope_uri
+        )
     except RoEError as exc:
         logger.error(f"RoE load failed: {exc}")
         sys.exit(1)

@@ -299,6 +299,24 @@ exist and claims "least privilege IAM" that #11 contradicts — fold into a docs
     program's authorization. This strengthens BI-D7: the dispatcher asserts *both* "this
     program" and "this domain," and a **mismatch between them hard-fails** — the most likely
     real-world operator error S1 can catch.
+  - **Revision (2026-07-22, during S1 implementation) — one RoE object PER ENGAGEMENT, not one
+    shared document.** Originally spec'd as a single `s3://.../roe/scope.json` holding a
+    `programs: {handle: {...}}` map for every engagement. The owner flagged the operational risk
+    directly: multiple engagements need genuinely separate RoE, and a shared file means one bad
+    hand-edit can deny scans for every engagement at once, not just the one being edited. Revised
+    layout: `s3://<findings-bucket>/roe/<program>/scope.json`, one object per engagement, each
+    file *is* the program document (no wrapping map). Two things this also buys, beyond fixing
+    the blast-radius problem: (1) it **structurally** reinforces "never search-all" — there is no
+    in-repo way to enumerate or search across engagement files, versus a shared document where
+    the map was merely a convention not to abuse; (2) `--scope-uri` becomes derivable from
+    `--program` + the bucket the scanner already has (`$S3_BUCKET_NAME`), which eliminates the
+    separate `ROE_SCOPE_URI` Infisical secret the original design needed. A new self-consistency
+    check (the loaded file's own `handle` field must match the requested `--program`) guards
+    against a misnamed prefix or copy-pasted file silently applying the wrong engagement's rules
+    under a right-looking key — meaningful now that the S3 key itself is the selector, not just a
+    dict lookup. All the surrounding decisions below (two out-of-scope sources, `asset_type`
+    allowlist, wildcard translation, H1 token never on the scan VM, per-program
+    `identification`) are unchanged by this revision.
   - **Two independent out-of-scope sources, verified against the live API 2026-07-22:**
     `structured_scopes` entries with `eligible_for_submission: false`, **and** a separate
     `GET /hackers/programs/{handle}/scope_exclusions` endpoint. Both must map to

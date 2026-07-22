@@ -2,10 +2,18 @@
 
 Fail-closed throughout, deliberately NOT following scanner.py's
 except-and-continue house style (BI-D8): every failure mode here --
-object absent, access denied, undecryptable, malformed JSON, unknown
-program handle, empty-after-translation -- raises `RoEError`. The caller
+object absent, access denied, undecryptable, malformed JSON, handle
+mismatch, empty-after-translation -- raises `RoEError`. The caller
 (`scanner.main`) must let that abort the process before any subprocess
 runs.
+
+Layout: one RoE object PER ENGAGEMENT, `s3://<bucket>/roe/<program>/scope.json`
+(BI-D9 revision, 2026-07-22) -- not one shared document keyed by program.
+A bad hand-edit to one engagement's file can't deny scans for every other
+engagement, and there is no in-repo "list every program" affordance to
+search across, which structurally reinforces BI-D9's "never search all
+programs" rule rather than merely relying on this module's callers to
+respect it.
 """
 
 from __future__ import annotations
@@ -14,7 +22,6 @@ import json
 import logging
 import re
 from dataclasses import dataclass
-from urllib.parse import urlparse
 
 import boto3
 from botocore.exceptions import ClientError
@@ -30,6 +37,14 @@ logger = logging.getLogger(__name__)
 # hostname. An allowlist, not a blocklist, is what makes an unrecognized
 # future asset_type default to not-scanned.
 _ALLOWED_ASSET_TYPES = frozenset({"URL", "WILDCARD"})
+
+# `--program` now participates in an S3 key (`roe/<program>/scope.json`),
+# not just a dict lookup -- constrain it to a conservative handle shape
+# before it touches a path. S3 itself has no directory-traversal semantics
+# (a literal ".." segment is just a character in a flat key namespace), but
+# a malformed handle producing a weird literal key is still worth rejecting
+# outright rather than tolerating.
+_PROGRAM_HANDLE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 
 
 class RoEError(Exception):
@@ -56,8 +71,13 @@ class Identification(BaseModel):
 
 
 class Program(BaseModel):
+    """One engagement's RoE. This IS the top-level document at
+    `roe/<handle>/scope.json` -- no wrapping map, since the S3 key is
+    already the selector."""
+
     model_config = ConfigDict(extra="forbid")
 
+    version: int
     platform: str
     handle: str
     synced_at: str
@@ -69,13 +89,6 @@ class Program(BaseModel):
     # while believing it was compliant.
     scope_exclusions: list[ScopeEntry] = []
     identification: Identification | None = None
-
-
-class RoEDocument(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    version: int
-    programs: dict[str, Program]
 
 
 @dataclass(frozen=True)
@@ -91,20 +104,38 @@ class ProgramScope:
     dropped_unknown_asset_type: int = 0
 
 
-def _parse_s3_uri(scope_uri: str) -> tuple[str, str]:
-    parsed = urlparse(scope_uri)
-    if parsed.scheme != "s3" or not parsed.netloc or not parsed.path.lstrip("/"):
-        raise RoEError(f"--scope-uri must be an s3://bucket/key URI, got {scope_uri!r}")
-    return parsed.netloc, parsed.path.lstrip("/")
+def validate_program_handle(program_handle: str) -> None:
+    if not _PROGRAM_HANDLE_RE.match(program_handle):
+        raise RoEError(
+            f"--program {program_handle!r} is not a valid handle "
+            "(expected alphanumeric, '-', '_' only)"
+        )
 
 
-def load_roe(scope_uri: str) -> RoEDocument:
-    """Fetch and parse the RoE document from S3. S3 performs KMS decryption
-    server-side (given `s3:GetObject` + `kms:Decrypt` on the caller's role
-    -- IAM grant lives in glunk-works/global-bootstrap, not here); this
-    function does no manual decrypt call.
+def scope_uri_for_program(bucket: str, program_handle: str) -> str:
+    """The default per-engagement layout: `roe/<program>/scope.json` under
+    the same findings bucket the task role already reads/writes (BI-D8:
+    reuse the existing S3 + KMS grant, no new IAM anywhere)."""
+    return f"s3://{bucket}/roe/{program_handle}/scope.json"
+
+
+def load_roe(scope_uri: str, expected_handle: str) -> Program:
+    """Fetch and parse one engagement's RoE object from S3. S3 performs KMS
+    decryption server-side (given `s3:GetObject` + `kms:Decrypt` on the
+    caller's role -- already granted on the findings bucket, see BI-D8);
+    this function does no manual decrypt call.
+
+    `expected_handle` must match the loaded document's own `handle` field --
+    a self-consistency check only meaningful now that the S3 key itself is
+    the selector: a misnamed prefix or a copy-pasted file would otherwise
+    silently apply the wrong engagement's rules under the right-looking key.
     """
-    bucket, key = _parse_s3_uri(scope_uri)
+    if not scope_uri.startswith("s3://"):
+        raise RoEError(f"--scope-uri must be an s3://bucket/key URI, got {scope_uri!r}")
+    bucket, _, key = scope_uri[len("s3://") :].partition("/")
+    if not bucket or not key:
+        raise RoEError(f"--scope-uri must be an s3://bucket/key URI, got {scope_uri!r}")
+
     s3 = boto3.client("s3")
     try:
         response = s3.get_object(Bucket=bucket, Key=key)
@@ -122,20 +153,18 @@ def load_roe(scope_uri: str) -> RoEDocument:
         ) from exc
 
     try:
-        return RoEDocument.model_validate(payload)
+        program = Program.model_validate(payload)
     except ValidationError as exc:
         raise RoEError(
             f"RoE object s3://{bucket}/{key} does not match the expected schema: {exc}"
         ) from exc
 
-
-def select_program(doc: RoEDocument, program_handle: str) -> Program:
-    program = doc.programs.get(program_handle)
-    if program is None:
+    if program.handle != expected_handle:
         raise RoEError(
-            f"program {program_handle!r} is not present in the RoE document "
-            f"(known handles: {sorted(doc.programs)})"
+            f"RoE object s3://{bucket}/{key} declares handle {program.handle!r}, "
+            f"expected {expected_handle!r} -- refusing to scan"
         )
+
     return program
 
 
@@ -208,9 +237,13 @@ def translate_program_scope(program: Program) -> tuple[ScopeRules, int]:
     return rules, dropped_unknown_asset_type
 
 
-def load_program_scope(scope_uri: str, program_handle: str) -> ProgramScope:
-    """The single entry point `scanner.main` calls: load, select, translate,
-    and refuse to proceed if translation produced zero in-scope patterns.
+def load_program_scope(
+    program_handle: str, *, bucket: str, scope_uri: str | None = None
+) -> ProgramScope:
+    """The single entry point `scanner.main` calls: validate the handle,
+    load (from `scope_uri` if given, else the derived per-engagement
+    default), translate, and refuse to proceed if translation produced
+    zero in-scope patterns.
 
     `ScopeRules` already denies everything on an empty `in_scope_regex` by
     construction (fail-closed belt), but this explicit check makes the
@@ -218,8 +251,9 @@ def load_program_scope(scope_uri: str, program_handle: str) -> ProgramScope:
     translation") instead of surfacing as an opaque scope-violation on the
     first candidate (the braces, not just the belt).
     """
-    doc = load_roe(scope_uri)
-    program = select_program(doc, program_handle)
+    validate_program_handle(program_handle)
+    uri = scope_uri or scope_uri_for_program(bucket, program_handle)
+    program = load_roe(uri, program_handle)
     rules, dropped_unknown_asset_type = translate_program_scope(program)
 
     if not rules.in_scope_regex:

@@ -619,10 +619,12 @@ def test_main_missing_contact_url_exits(mocker):
     assert excinfo.value.code == 2
 
 
-def test_main_missing_scope_uri_aborts_before_any_subprocess(mocker):
+def test_main_missing_scope_uri_and_bucket_aborts_before_any_subprocess(mocker):
+    # No --scope-uri override AND no $S3_BUCKET_NAME to derive the default
+    # from (roe/<program>/scope.json) -- can't even construct where to look.
     mocker.patch.dict(os.environ, {}, clear=False)
-    if "ROE_SCOPE_URI" in os.environ:
-        del os.environ["ROE_SCOPE_URI"]
+    if "S3_BUCKET_NAME" in os.environ:
+        del os.environ["S3_BUCKET_NAME"]
     mocker.patch("sys.argv", ["scanner.py", "example.com", "--program", "acme", "--contact-url", "https://hackerone.com/seuss"])
     mock_run = mocker.patch("bounty_scanner.scanner.subprocess.run")
 
@@ -631,6 +633,22 @@ def test_main_missing_scope_uri_aborts_before_any_subprocess(mocker):
 
     assert excinfo.value.code == 1
     mock_run.assert_not_called()
+
+
+def test_main_derives_scope_uri_from_program_and_bucket_when_not_overridden(mocker, mock_triage_report, mock_artifacts):
+    mocker.patch.dict(os.environ, {"S3_BUCKET_NAME": "findings-bucket"})
+    mocker.patch("sys.argv", ["scanner.py", "example.com", "--program", "acme", "--contact-url", "https://hackerone.com/seuss"])
+    mock_load = mocker.patch("bounty_scanner.scanner.load_program_scope", return_value=_program_scope())
+    mock_recon_cm = MagicMock()
+    mock_recon_cm.__enter__.return_value = mock_artifacts
+    mocker.patch("bounty_scanner.scanner.run_recon_pipeline", return_value=mock_recon_cm)
+    mocker.patch("bounty_scanner.scanner.triage_findings", return_value=mock_triage_report)
+    mocker.patch("bounty_scanner.scanner.upload_to_s3")
+    mocker.patch("bounty_scanner.scanner.upload_scan_metadata")
+
+    main()
+
+    mock_load.assert_called_once_with("acme", bucket="findings-bucket", scope_uri=None)
 
 
 def test_main_roe_load_failure_aborts_before_any_subprocess(mocker):
