@@ -269,6 +269,169 @@ on revert. A guard never observed failing is not a guard.
 
 ---
 
+## Session plan — clear points, models, and kickoff prompts
+
+**This section is scaffolding for its own obsolescence.** SW is the sprint that builds `/resume`
+and `/handoff`; until it lands, this repo has neither, so the session discipline they automate has
+to be run by hand. Once Task 4 completes, `/handoff` writes the cursor and `/resume` reads it, and
+everything below collapses into two slash commands. Delete it then.
+
+**Two rules that hold for every session:**
+
+1. **`/clear` between every session below.** `/model` alone does **not** clear context — a session
+   that switches model still holds every assumption the previous one made, so it proofreads its
+   own reasoning instead of re-deriving it. Each row is a fresh window.
+2. **End every session by updating `.ai/next-steps.md`** — what was done, what's next, which model.
+   That file is the only cursor SW has until `/handoff` exists, and a session that ends without
+   writing it strands the next one.
+
+| # | Task | Model | Ends when |
+|---|---|---|---|
+| 1 | T1 verify plugin schema | **Sonnet** | the confirmed schema + its source is written down |
+| 2 | T2 stand up `claude-workbench` | **Sonnet** | repo + ruleset verified, `v0.1.0` tagged |
+| 3 | T3a schema + the 7 skills | **Opus** | `project-schema.md` + all 7 skills generalized |
+| 4 | T3b the 4 agents | **Opus** | agents generalized, grep gate green, `v0.2.0` tagged |
+| 5 | T4 adopt here | **Opus** | 3 files committed, fresh session lists all 7 skills |
+| 6 | T5 drive a real sprint | **Sonnet** | the loop completes; findings logged, not yet judged |
+| 7 | T5 disposition findings | **Opus** | every finding is key-or-not-portable, with reasoning |
+
+**Why T3 splits across two sessions.** 7 skills + 4 agents is ~55 KB of source to read and rewrite;
+one session accumulates the whole thing and gets slower and less careful as it goes. The split is
+the same token-hygiene argument this sprint exists to systematize — it just has to be manual this
+once. **Why session 7 is separate from 6:** the session that hit a friction point is the worst one
+to judge whether it is a schema gap or a portability limit, because it already has a fix in mind.
+Fresh context is the point, exactly as in the review protocol being extracted.
+
+### Session 1 — T1, verify the plugin schema (Sonnet)
+
+```
+Read .ai/next-steps.md, then sprints/SW_way_of_working/sprint_plan.md.
+
+Do SW Task 1 only. Verify, against current Claude Code documentation:
+  - marketplace.json and plugin.json field names + required keys
+  - the plugin subdirectory names (skills/, agents/, hooks/)
+  - the hooks.json shape, and whether ${CLAUDE_PLUGIN_ROOT} is the correct
+    interpolation for a hook script path
+  - the settings keys extraKnownMarketplaces / enabledPlugins, including
+    whether the plugin reference is name@marketplace
+
+Report the confirmed schema with its source. Create no repo, write no JSON.
+
+If anything differs from what the sprint plan assumes: STOP and say so.
+The plan gets amended by an Opus session, not worked around here.
+```
+
+### Session 2 — T2, stand up `claude-workbench` (Sonnet)
+
+```
+Read .ai/next-steps.md and sprints/SW_way_of_working/sprint_plan.md Task 2,
+plus session 1's confirmed schema recorded in the cursor.
+
+Create glunk-works/claude-workbench per Task 2: public repo, the
+protected-integration-branches ruleset mirroring bounty-infra's field-for-field,
+the plugin skeleton, docs/decisions.md seeded with WB-D1..D4.
+
+Move conventions.md in VERBATIM from loop-orchestrator's
+.ai/context/conventions.md (byte-identical -- Task 6's drift guard depends on the
+first diff being empty). Port workflow.md with its loop-orchestrator-specific
+war stories replaced by schema references.
+
+Verify the ruleset via the rules/branches/main API, then tag v0.1.0.
+Open a PR; do not merge.
+```
+
+### Session 3 — T3a, the schema and the 7 skills (Opus)
+
+```
+Read .ai/next-steps.md and sprints/SW_way_of_working/sprint_plan.md Task 3.
+
+Write reference/project-schema.md, then generalize the 7 skills against it
+using the coupling inventory in Task 3's table. Every literal removed becomes
+a schema key.
+
+Hold two things throughout:
+  - review.ci_gate: null must be a CLEAN path through every skill -- no dangling
+    instruction to post a review nobody requires. If that branch is awkward, the
+    schema is wrong, not bounty-infra.
+  - the frozen header/attestation strings move into the schema AS DATA so they
+    are pasted, never retyped. Carry the paste-never-paraphrase warning into
+    project-schema.md next to the keys.
+
+Skills only this session. Agents are session 4.
+```
+
+### Session 4 — T3b, the 4 agents (Opus)
+
+```
+Read .ai/next-steps.md, sprints/SW_way_of_working/sprint_plan.md Task 3, and
+the project-schema.md written in session 3.
+
+Generalize architect, coder, security-critic, docs-consistency against the
+schema. security-critic reads `threat_model`; docs-consistency reads
+`load_bearing_docs`; both drop their hardcoded check lists.
+
+Then add the acceptance gate as a CI job in claude-workbench:
+  grep -rE 'hatch run|migration_roadmap|architect-review|loop-orchestrator|Seuss27'
+  over skills/ and agents/ must return ZERO hits outside project-schema.md's
+  example block.
+
+Confirm it goes red on a deliberate violation before trusting it green.
+Tag v0.2.0. Open a PR; do not merge.
+```
+
+### Session 5 — T4, adopt in bounty-infra (Opus)
+
+```
+Read .ai/next-steps.md and sprints/SW_way_of_working/sprint_plan.md Task 4.
+
+Land the three files: .ai/project.yml (values verified against the LIVE ruleset,
+not copied from the sprint plan), .claude/settings.json (marketplace pinned to
+the v0.2.0 TAG, enabledPlugins, the deny-list), and the slimmed CLAUDE.md.
+
+For CLAUDE.md: delete the conventions URL section and the model-routing/merge-bar
+prose the plugin now owns. Keep "What this is", the BI-D5 warning, all three
+Local: sections, what-must-not-be-committed, and Pointers. Judge each remaining
+paragraph by one question -- is this local truth, or is it method? Method goes.
+
+Then verify in a FRESH session that all 7 skills list and /resume reads this
+repo's cursor and reports the 8-check ruleset. Open a PR; do not merge.
+```
+
+### Session 6 — T5, drive a real sprint through it (Sonnet)
+
+```
+Read .ai/next-steps.md. The plugin is live in this repo now.
+
+Pick the next real piece of work (the outstanding S1 operator action, or an SG
+gate) and drive it end to end using the plugin:
+  /resume -> work -> /critic-gate -> /handoff -> fresh session -> /ship
+
+Log EVERY place a skill assumed something untrue about this repo -- verbatim,
+with the skill and the line. Do not fix any of them and do not override a skill
+locally; session 7 dispositions them.
+
+A clean run with zero findings is suspicious, not successful -- it means the
+exercise was too small to exercise the seams. Say so if that happens.
+```
+
+### Session 7 — T5, disposition the findings (Opus)
+
+```
+Read .ai/next-steps.md and session 6's findings log.
+
+Disposition each finding exactly one of two ways:
+  - a NEW SCHEMA KEY (upstream fix in claude-workbench, everyone benefits), or
+  - NOT PORTABLE -- the skill moves back to repo-local, and WB-D4 was wrong
+    about it. Say what WB-D4 got wrong.
+
+"Override it locally in bounty-infra" is not a third option -- an override
+shadows the whole skill and silently stops receiving upstream fixes (BI-D11).
+
+Record the reasoning per finding, land the schema changes as a claude-workbench
+PR, and update .ai/next-steps.md to close SW and point at loop-orchestrator's
+adoption sprint. #19 closes here.
+```
+
 ## Risks
 
 - **The bootstrap trap.** If a generalization breaks `/resume`, the tool used to recover is the

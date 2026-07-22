@@ -20,6 +20,13 @@ not scaffolding, deliberately. Every vendor surface this repo modeled from memor
 objects, H1's `scope_exclusions`, zizmor-action's exit code) was wrong in a way that cost a run.
 SW touches no `src/`, no `infra/`, and no workflow.
 
+**Next action: start session 1 (Sonnet).** The sprint plan's § *Session plan* carries all seven
+sessions — model, `/clear` point, and a verbatim kickoff prompt each. **This repo has no
+`/resume` or `/handoff` yet — SW is the sprint that builds them** — so until Task 4 lands, that
+section *is* the handoff protocol, run by hand: `/clear` between every session, and **every
+session ends by updating this file**. A session that ends without writing it strands the next one.
+Delete that section once the plugin is adopted; it exists only to bootstrap its own replacement.
+
 **S1 merged 2026-07-22** ([#41](https://github.com/glunk-works/bounty-infra/pull/41), squash
 commit `eaf8038`) — but with the **single-shared-RoE-document** design, not the per-engagement
 revision below. **A stranded-commit incident happened during this session, recovered.** The
