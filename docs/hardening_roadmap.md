@@ -25,7 +25,7 @@ the ECR repo name `glunk-works/bounty-scanner`, which is inert.
 | Class | Home | Never |
 |---|---|---|
 | Genuine secrets, account-specific values | Infisical (`/bounty-infra`, `prod`) | Committed, or echoed to a workflow log |
-| RoE / scope allowlist (S1, #7) | Infisical — **runtime config** | A committed `scope.yaml`. It enumerates which bounty programs the operator is engaged with — the most sensitive artifact the system will hold |
+| RoE / scope allowlist (S1, #7) | **S3 under the existing KMS key**, fetched by the scanner at startup; Infisical holds only the `s3://…` **pointer** (BI-D8, 2026-07-22 — supersedes "Infisical, runtime config") | A committed `scope.yaml`. It enumerates which bounty programs the operator is engaged with — the most sensitive artifact the system will hold. Also never a workflow log, artifact, or the ECS `containerOverrides` JSON — under BI-D8 the rules never transit CI at all. Test fixtures use invented rules (`^example\.com$`), never real program scope |
 | Scan findings, triage reports, resolved hosts/subdomains | S3 only | A workflow log, artifact, or PR comment. This is third-party vulnerability data |
 | Pre-remediation vulnerability detail | Draft security advisories (below) | A public issue body, until the fix has landed |
 
@@ -58,7 +58,8 @@ the wrapper (loop-orchestrator S47-D12; comments on #7/#13).
 | Sprint | Closes | Scope |
 |---|---|---|
 | **S0 — Governance & CI/CD hardening** | #6, #8, #9, #10 | Branch-protection ruleset + minimal working method; gated OpenTofu deploy (plan-on-PR + apply-on-merge, `production` Environment approval); non-bypassable CI on all paths; `run-scan.yml` injection fix + drop unused `GITHUB_TOKEN`. **Also unblocks loop-orchestrator S47's #18** (same file as #6). |
-| **S1 — Scanner security core** | #7, #13 | The scanner's **own** structural scope check (RoE allowlist before any subprocess) and triage-prompt hardening (delimit/neutralize target-derived fields; triage advisory-only). The wrap+harden core. Its own planning pass at its boundary. |
+| **SC — `scope-core` extraction** (BI-D6) | new | **Prerequisite for S1.** Extract loop-orchestrator's scope validator + ingestion sanitizer into `glunk-works/scope-core` and re-point loop-orchestrator at it (deleting its local copies). Cross-repo; touches no bounty-infra `src/`. Cheapest now — those primitives still have zero live consumers. `sprints/SC_scope_core_extraction/sprint_plan.md`. |
+| **S1 — Scanner security core** | #7, #13, **#32** | Structural scope check **consumed from `scope-core`** (BI-D6), enforced at two tiers (BI-D7) with the RoE fetched from S3 (BI-D8); triage-prompt hardening (fence + sanitize target-derived fields; triage advisory-only); scanner traffic attribution + rate limiting. **#32 joins S1** — it lands on the same `run_recon_pipeline` argv the scope filter is inserted into, and is thematically one change with #7. Planned 2026-07-22: `sprints/S1_scanner_security_core/sprint_plan.md`. |
 | **S2 — Scanner robustness** | #11, #12, #14 | Tighten task-role IAM to what's used; pin tools/templates/deps (reproducible builds); distinguish partial/failed scans from clean success. **#11 is re-scoped by BI-D5** — the Fargate task role it targets is being retired; re-point at the replacement credential path. |
 | **SG — CI gate expansion** | new | Adopt the four shared gates (`secrets-scan`/gitleaks, `dependency-audit`, `sbom`, `pr-title`) + **`zizmor`** (workflow security — detects the template-injection class that was #6, converting T4's fix from done-once into can't-regress) + container image scan (trivy/grype) + IaC security scan (checkov/trivy-config; `tflint` lints, it does not scan). |
 | **SE — Egress migration (BI-D5)** | new | Retire ECS/VPC/ECR from `infra/**`; per-scan ephemeral VM on Vultr with a reserved IP; re-point `run-scan.yml` at the new launcher; credential path for S3 write; provider abuse-team notification. |
@@ -81,7 +82,9 @@ neither `infra/**` nor the runtime, so they can land **immediately and in parall
 anything else. The remaining two should follow **SE**: an IaC security scan run now would spend
 its findings on ECS/VPC resources BI-D5 deletes, and the image scan wants to target whatever
 registry SE settles on. **SE before S2**, since S2's #11 targets a role SE retires. **S1 is
-independent of both** and can be sequenced on its own merits.
+independent of both** and can be sequenced on its own merits — but as of 2026-07-22 it has a
+prerequisite of its own: **SC before S1** (BI-D6), since S1's first task is "add the
+`scope-core` dependency."
 
 ## The central conventions repo (BI-D3)
 
@@ -181,10 +184,12 @@ exist and claims "least privilege IAM" that #11 contradicts — fold into a docs
 - **BI-D3 (MG3, 2026-07-21) — a central repo hosts the shared conventions/way-of-working**
   that each repo's `CLAUDE.md` **references + locally extends** (best long-term home for the
   method). This is the reference-and-extend model with the shared source in a **dedicated
-  central repo** rather than in loop-orchestrator. **Docs/conventions only — NOT a shared-code
-  package** (`scope_validator` etc. stay each repo's own; #7 is bounty-infra's own impl).
+  central repo** rather than in loop-orchestrator. ~~Docs/conventions only — NOT a shared-code
+  package~~ — **the no-shared-code clause is SUPERSEDED by BI-D6 (2026-07-22)**; the rest of
+  BI-D3 stands, and the conventions repo itself remains **docs-only** (`scope-core` is a
+  separate repo with its own release cadence, deliberately not co-located with docs).
   (Rejected: shared source living in loop-orchestrator's own repo — a dedicated central home
-  is cleaner long-term; a shared *code* package — not wanted, out of scope.)
+  is cleaner long-term.)
 - **BI-D4 (2026-07-21) — public-repo posture** (§ *Public-repo posture* above): the repo stays
   **public**; secrets and the RoE allowlist live in **Infisical**, findings in **S3**,
   pre-remediation vuln detail in **draft advisories** published post-fix; `tofu plan` output is
@@ -219,6 +224,65 @@ exist and claims "least privilege IAM" that #11 contradicts — fold into a docs
     AWS's policy. *Fargate + userspace proxy on a VPS* — viable and minimal, but per-tool proxy
     config with AWS-side DNS is a weaker guarantee than moving the host; only worth it under
     time pressure, and the pipeline is pre-production.
+
+## Locked decisions (S1 planning pass, 2026-07-22, owner-confirmed via micro-gates)
+
+- **BI-D6 (2026-07-22) — shared code IS allowed, via a dedicated small package repo.**
+  Supersedes BI-D3's "NOT a shared-code package" clause. loop-orchestrator's two security
+  primitives — the structural scope validator and the ingestion sanitizer — move to
+  **`glunk-works/scope-core`**, which both repos depend on; **neither product repo depends on
+  the other**. Detail and the extraction plan: `sprints/SC_scope_core_extraction/sprint_plan.md`.
+  - **The record was self-contradictory and BI-D3 was the wrong half.** loop-orchestrator's
+    sprint-45 plan describes these primitives as "**built once here and shared into the bounty
+    loop**" and as "the concrete fix for `bounty-infra#7`/`#13`", while BI-D3 said bounty-infra
+    must write its own. BI-D3's clause was **scope control on the conventions repo** — stopping
+    a docs pass from ballooning into a code-sharing project — not a considered rejection of
+    sharing.
+  - **Three facts make it tractable:** the primitives are already **loader-agnostic**
+    (`ScopeRules.from_target()` takes a structural `Protocol`, not a DB row — so a Postgres
+    `targets` table and an S3-hosted RoE are both already supported callers: **share the
+    decider, not the loader**); the surface is **~175 lines, pydantic + stdlib, no I/O and no
+    credentials**, and bounty-infra already has pydantic, so the dependency delta is zero; and
+    **both repos are public while the sensitive part is the rules, not the mechanism** — the
+    code publishes safely, the RoE never enters either repo.
+  - **The argument is safety, not convenience.** Once loop-orchestrator #18 lands and it
+    dispatches scans here, two implementations of "in scope" means the orchestrator can believe
+    a target is in-scope that the scanner rejects — or, worse, the reverse.
+  - **Timing:** loop-orchestrator shipped these with **zero live consumers by design** (its
+    P0-D11), so this is the cheapest extraction will ever be. **Extraction must delete
+    loop-orchestrator's local copies**, or it creates the divergence it exists to prevent.
+  - (Rejected: *bounty-infra imports loop-orchestrator directly* — wrong dependency direction,
+    the scan substrate depending on its own dispatcher, and it drags LangGraph/MCP/Postgres into
+    a minimal scanner container. *Fold the code into the BI-D3 conventions repo* — couples a
+    docs cadence to a security-primitive release cadence. *Vendor + CI drift guard* — ships
+    fastest and matches the `ruleset-drift.yml` idiom, but still leaves two copies and two PRs
+    per fix.)
+- **BI-D7 (2026-07-22) — split out-of-scope policy: hard-fail the input, filter the discovered
+  set.** The dispatched `target_domain` is an **assertion of authority**; if false it is an
+  operator/orchestrator error and hard-fails **before any subprocess runs**. A subfinder-
+  discovered host is an **observation**; out-of-scope ones are dropped, counted, and the scan
+  continues. Nothing out-of-scope reaches `httpx` or `nuclei` either way. This answers
+  loop-orchestrator's P0-D14, which deliberately left reject-vs-escalate policy to the consumer.
+  - **Validating only the input does not close #7** — `subfinder` enumerates from CT logs and
+    passive DNS, which routinely return shared-CDN hosts, vendor subdomains, and third-party-
+    owned hosts. The check must be a **filter over the discovered set**, not a gate on argv.
+  - (Rejected: *hard-fail everywhere* — one stray CDN hostname kills a valid scan, and a control
+    people are motivated to disable is not a control. *Filter everywhere* — a misdispatched
+    target yields a clean-looking empty report, the "green for the wrong reason" class S0 spent
+    a sprint eliminating.)
+- **BI-D8 (2026-07-22) — the scanner fetches its RoE from S3 at startup; Infisical holds only
+  the pointer.** Rules live in **S3 under the existing KMS key**, fetched with the credentials
+  the scanner already needs for findings upload. The RoE therefore **never transits GitHub
+  Actions** — no log, artifact, PR comment, or ECS `containerOverrides` JSON — and it survives
+  BI-D5, since S3 + KMS are exactly what AWS retains. Load is **fail-closed**: unfetchable,
+  undecryptable, or malformed rules abort the run before any subprocess.
+  - **Why not Infisical directly from the scanner:** that parks a secrets-manager credential on
+    the **scan VM** — by BI-D5's own design the most exposed and most disposable machine in the
+    system, and the one most likely to be seized or abuse-suspended.
+  - (Rejected: *env var carrying the rules* — transits CI and lands readable via
+    `aws ecs describe-task-definition`. *`--scope-file` + launcher materializes it* — clean
+    scanner-side seam, but on Fargate the file still arrives via env-then-write, inheriting the
+    same exposure and adding a layer.)
 
 ## Cross-repo coupling
 

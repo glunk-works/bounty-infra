@@ -33,8 +33,11 @@ branch names, squash-merge policy, label taxonomy, Definition of Done — are **
 here**. Interim source of truth:
 [`loop-orchestrator .ai/context/conventions.md`](https://github.com/glunk-works/loop-orchestrator/blob/main/.ai/context/conventions.md).
 A dedicated central conventions repo is the agreed long-term home (BI-D3, its own pass);
-re-point this link when it exists. **Docs/conventions only — not a shared-code package**:
-the scanner's scope check (#7) is bounty-infra's own implementation, not an import.
+re-point this link when it exists. The **conventions repo** stays docs-only — but
+**shared *code* is allowed in its own package repo (BI-D6, 2026-07-22, superseding BI-D3's
+no-shared-code clause)**: the scanner's scope check (#7) and triage sanitizer (#13) are
+**consumed from `glunk-works/scope-core`**, not reimplemented here. Neither product repo
+depends on the other. See `sprints/SC_scope_core_extraction/sprint_plan.md`.
 
 Everything below is bounty-infra's **local extension**.
 
