@@ -6,6 +6,27 @@ Regenerate this at the end of every working session.
 
 ## Now
 
+**SW — way of working — was planned 2026-07-22 (Opus pass) and is the next sprint with code to
+write.** `sprints/SW_way_of_working/sprint_plan.md`, decisions **BI-D10..D13** in the roadmap.
+Extract loop-orchestrator's Claude Code workflow layer (7 skills, 4 portable agents, the
+SessionStart cursor hook, the Global Conventions) into a **plugin** published from a new
+`glunk-works/claude-workbench`, parameterized by a per-repo `.ai/project.yml`; adopt here first
+(BI-D13 — this repo is a different shape, which is what forces the parameterization to be real).
+Closes **#19**. **BI-D3 is fully retired** — the plugin repo is the central conventions home it
+called for, and the `raw.githubusercontent` URL in `CLAUDE.md` goes away with it.
+
+**Task 1 is "verify the plugin manifest schema against current docs before writing any JSON"** —
+not scaffolding, deliberately. Every vendor surface this repo modeled from memory (annotated tag
+objects, H1's `scope_exclusions`, zizmor-action's exit code) was wrong in a way that cost a run.
+SW touches no `src/`, no `infra/`, and no workflow.
+
+**Next action: start session 1 (Sonnet).** The sprint plan's § *Session plan* carries all seven
+sessions — model, `/clear` point, and a verbatim kickoff prompt each. **This repo has no
+`/resume` or `/handoff` yet — SW is the sprint that builds them** — so until Task 4 lands, that
+section *is* the handoff protocol, run by hand: `/clear` between every session, and **every
+session ends by updating this file**. A session that ends without writing it strands the next one.
+Delete that section once the plugin is adopted; it exists only to bootstrap its own replacement.
+
 **S1 merged 2026-07-22** ([#41](https://github.com/glunk-works/bounty-infra/pull/41), squash
 commit `eaf8038`) — but with the **single-shared-RoE-document** design, not the per-engagement
 revision below. **A stranded-commit incident happened during this session, recovered.** The
@@ -593,8 +614,10 @@ Ran zizmor locally against `main` (post-#34) before touching anything: **46 find
 
 - ~~The four unadopted shared gates~~ and ~~the compute-model decision~~ — **both now
   scheduled**: SG and SE respectively in the roadmap's sprint sequence (2026-07-21).
-- **The central conventions repo (BI-D3).** `CLAUDE.md` points at loop-orchestrator's
-  `conventions.md` as the interim source; re-point once the central repo exists.
+- ~~**The central conventions repo (BI-D3).**~~ — **now scheduled as SW** (2026-07-22), and the
+  answer changed: a Claude Code **plugin**, not a docs repo (**BI-D10**, superseding BI-D3 in
+  full). `CLAUDE.md`'s `raw.githubusercontent` link to loop-orchestrator's `conventions.md` is
+  the interim source until SW Task 4 deletes it.
 - **Infisical has no IaC.** Both machine identities are hand-configured and invisible to
   code review, unlike the AWS half (`global-bootstrap` Terraform). Lose or alter that config
   and nothing detects it — the failure surfaces as a 403 at deploy time. Infisical does ship

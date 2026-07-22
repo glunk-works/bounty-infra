@@ -63,6 +63,7 @@ the wrapper (loop-orchestrator S47-D12; comments on #7/#13).
 | **S2 — Scanner robustness** | #11, #12, #14 | Tighten task-role IAM to what's used; pin tools/templates/deps (reproducible builds); distinguish partial/failed scans from clean success. **#11 is re-scoped by BI-D5** — the Fargate task role it targets is being retired; re-point at the replacement credential path. |
 | **SG — CI gate expansion** | new | Adopt the four shared gates (`secrets-scan`/gitleaks, `dependency-audit`, `sbom`, `pr-title`) + **`zizmor`** (workflow security — detects the template-injection class that was #6, converting T4's fix from done-once into can't-regress) + container image scan (trivy/grype) + IaC security scan (checkov/trivy-config; `tflint` lints, it does not scan). |
 | **SE — Egress migration (BI-D5)** | new | Retire ECS/VPC/ECR from `infra/**`; per-scan ephemeral VM on Vultr with a reserved IP; re-point `run-scan.yml` at the new launcher; credential path for S3 write; provider abuse-team notification. |
+| **SW — Way of working** (BI-D10..D13) | **#19** | Extract loop-orchestrator's Claude Code workflow layer (7 skills, 4 portable agents, the SessionStart cursor hook, the Global Conventions) into a **plugin** published from a new `glunk-works/claude-workbench`, parameterized by a per-repo `.ai/project.yml`; adopt here first. **Retires BI-D3** — the plugin repo *is* the central conventions home. Independent of every other sprint; touches no `src/`, `infra/`, or workflow. `sprints/SW_way_of_working/sprint_plan.md`. |
 
 **#6 severity is anticipatory, not live (qualifier added 2026-07-21).** `workflow_dispatch`
 requires repo **write** access and there is a single collaborator, so #6 is not currently an
@@ -86,7 +87,18 @@ independent of both** and can be sequenced on its own merits — but as of 2026-
 prerequisite of its own: **SC before S1** (BI-D6), since S1's first task is "add the
 `scope-core` dependency."
 
-## The central conventions repo (BI-D3)
+## RESOLVED — the central conventions repo (BI-D3, superseded by BI-D10 on 2026-07-22)
+
+> **BI-D3 is retired. The answer is a Claude Code plugin, not a docs repo** — see **BI-D10**
+> below and `sprints/SW_way_of_working/sprint_plan.md`. `glunk-works/claude-workbench` is the
+> central home BI-D3 called for, but it ships the conventions **as part of an installable
+> plugin** alongside the skills and agents, rather than as prose to be referenced by URL. That
+> difference is the whole point: BI-D3's "reference the central conventions" resolved in practice
+> to a `raw.githubusercontent` link in `CLAUDE.md` — a network fetch against a mutable `main`
+> that can be neither prompt-cached nor pinned. A plugin is pinned to a tag and loaded on demand.
+> BI-D3's *reference-and-extend* model survives intact; only its packaging changed.
+>
+> The section below is kept as the record of what BI-D3 said. Do not act on it.
 
 A **new central repo** is the single source of truth for the **working method / Global
 Conventions** — the "our way of working" docs that each repo's `CLAUDE.md` **references**,
@@ -185,9 +197,10 @@ exist and claims "least privilege IAM" that #11 contradicts — fold into a docs
   that each repo's `CLAUDE.md` **references + locally extends** (best long-term home for the
   method). This is the reference-and-extend model with the shared source in a **dedicated
   central repo** rather than in loop-orchestrator. ~~Docs/conventions only — NOT a shared-code
-  package~~ — **the no-shared-code clause is SUPERSEDED by BI-D6 (2026-07-22)**; the rest of
-  BI-D3 stands, and the conventions repo itself remains **docs-only** (`scope-core` is a
-  separate repo with its own release cadence, deliberately not co-located with docs).
+  package~~ — **the no-shared-code clause is SUPERSEDED by BI-D6 (2026-07-22)**; ~~the rest of
+  BI-D3 stands, and the conventions repo itself remains **docs-only**~~ — **and the remainder is
+  now SUPERSEDED by BI-D10 (2026-07-22): the central home is a Claude Code *plugin* repo, not a
+  docs repo.** BI-D3 is fully retired; its reference-and-extend model survives inside BI-D10.
   (Rejected: shared source living in loop-orchestrator's own repo — a dedicated central home
   is cleaner long-term.)
 - **BI-D4 (2026-07-21) — public-repo posture** (§ *Public-repo posture* above): the repo stays
@@ -352,6 +365,51 @@ exist and claims "least privilege IAM" that #11 contradicts — fold into a docs
     than none. **An unset contact remains a startup error**, so an anonymous scanner cannot ship
     by accident.
 
+## Locked decisions (SW planning pass, 2026-07-22, owner-confirmed)
+
+Full reasoning and the task breakdown: `sprints/SW_way_of_working/sprint_plan.md`.
+
+- **BI-D10 (2026-07-22) — the shared way of working ships as a Claude Code plugin from
+  `glunk-works/claude-workbench`, pinned to a tag.** Supersedes **BI-D3 in full** (its
+  no-shared-code clause had already gone to BI-D6). Each repo commits a `.claude/settings.json`
+  naming the marketplace + enabling the plugin; skills, agents, hooks, and the Global Conventions
+  arrive with it. The plugin is a **native** mechanism — no sync script, no submodule, no vendored
+  copies — and a repo-local skill of the same name shadows the plugin's, which is the extension
+  seam. **Tag-pinned, never a branch:** a mutable ref on something that shapes agent behavior is
+  a handoff to whoever moves it, the same rule this repo already enforces on GitHub Actions
+  `uses:`. (Rejected: **git submodule** — Claude Code does not discover skills nested in a
+  submodule path, so it needs symlinks or a sync step anyway, and submodules are friction on
+  Windows. **Copier template** — genuinely duplicates files into every repo; DRY at the template
+  level, not at runtime, and `copier update` conflicts are per-file busywork. **Status quo, a
+  `raw.githubusercontent` URL** — uncacheable, unpinnable, and silent when upstream moves.)
+- **BI-D11 (2026-07-22) — `.ai/project.yml` is the parameterization seam.** A shared skill may
+  **never name a repo-specific value**; it reads the contract. Every literal removed from a skill
+  becomes a schema key, and this is enforced by a grep-based CI job in `claude-workbench`, not by
+  convention. If a value cannot be expressed in the schema, the skill is not portable and belongs
+  local — and **a repo-local override of a shared skill is a bug report against the schema, not a
+  fork**, because the override shadows the whole skill and silently stops receiving upstream
+  fixes. The frozen review header/attestation strings live in the schema **as data** precisely so
+  they are pasted rather than retyped. (Rejected: **prose in `CLAUDE.md`** — unstructured, a skill
+  cannot verify a value is present, and "find the green gate by reading prose" is exactly where
+  drift starts. **yml as truth + `CLAUDE.md` rendering it** — adds a sync obligation between two
+  files, the failure mode being eliminated.)
+- **BI-D12 (2026-07-22) — the plugin holds only what works in any repo.** 7 skills + the 4 general
+  agents (`architect`, `coder`, `security-critic`, `docs-consistency`). `mutation-triage` (mutmut)
+  and `live-verify` (a live-GitHub V-run needing per-run spend authorization) stay
+  loop-orchestrator-local: they encode that product's internals, not a way of working, and
+  shipping them would falsify the plugin's own rule on day one. (Rejected: **everything, gated by
+  `project.yml`** — ships definitions referencing tools most repos do not have. **Skills only,
+  agents local** — agents are the layer most worth sharing; per-repo re-authoring is the problem.)
+- **BI-D13 (2026-07-22) — bounty-infra pilots; loop-orchestrator migrates after.** This repo has
+  an empty `.claude/` so it risks nothing, and it is a **different shape** (Python **plus**
+  OpenTofu, its own check taxonomy, **no `architect-review` gate**), which is what forces the
+  parameterization to be genuinely general rather than loop-orchestrator-flavored — in particular
+  `review.ci_gate: null` must be a clean path through every skill. loop-orchestrator keeps its
+  working local copies throughout; that duplication window is **deliberate** and closes only after
+  a real sprint has run through the plugin here. (Rejected: **loop-orchestrator first** — touches
+  a repo mid-sprint 47 behind a hard `architect-review` gate, and generalizes with an audience of
+  one. **Both at once** — if `/resume` breaks, the tool used to recover is the broken one.)
+
 ## Cross-repo coupling
 
 - **loop-orchestrator #18** (recon dispatch contract) lands `seed`/`token` inputs in
@@ -359,9 +417,20 @@ exist and claims "least privilege IAM" that #11 contradicts — fold into a docs
   S47's live V-run.
 - **kms:Decrypt:** #11 tightens the *scanner task role*; loop-orchestrator's fetch uses a
   *different* OIDC role that needs its own `kms:Decrypt` — no conflict (distinct principals).
+- **SW extracts loop-orchestrator's workflow layer** into `glunk-works/claude-workbench`
+  (BI-D10). Its skills/agents are the *source*, but SW does **not** modify that repo — it keeps
+  its working local copies until it adopts the plugin in its own later sprint (BI-D13).
+- **SW leaves one obligation in loop-orchestrator:** `src/loop_orchestrator/tools/scaffold/templates/CLAUDE.md`
+  is a **third copy** of the Global Conventions, read at runtime by `writer.py` to inject into
+  managed repos — a genuine non-Claude-Code consumer, so the plugin does not dissolve it. It
+  keeps shipping inside the wheel and gains a **drift guard** (a CI job diffing it against the
+  plugin's `reference/conventions.md` at the pinned tag). That job lands in loop-orchestrator's
+  adoption PR, not in SW; SW Task 6 records the obligation so it cannot be quietly dropped.
 
 ## Pointers
 
 - The 2026-07-19 review findings: issues #6–#16 (this repo).
 - loop-orchestrator `docs/bounty_loop_architecture.md` §5/§10, S47-D12 — shared design context.
 - `sprints/S0_governance_hardening/sprint_plan.md` — the detailed S0 plan.
+- `sprints/SW_way_of_working/sprint_plan.md` — the SW plan (plugin extraction, `.ai/project.yml`
+  schema, the coupling inventory per skill/agent, BI-D10..D13).
