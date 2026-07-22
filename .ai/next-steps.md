@@ -27,11 +27,28 @@ extended `ruleset-drift.yml`'s taxonomy to match (merged), *then* the live rules
 stays deliberately ungated — same BL-10 reasoning, unaffected by the three other SG additions
 landing alongside it (confirmed by owner).
 
-**Next action — pick one of two, they are independent:**
+**S1 is planned as of 2026-07-22** (Opus pass, 5 micro-gates) — and it grew a prerequisite.
+Plans: `sprints/S1_scanner_security_core/sprint_plan.md` and
+`sprints/SC_scope_core_extraction/sprint_plan.md`. New decisions **BI-D6/D7/D8** in the roadmap.
 
-1. **SE — the egress migration itself.** Model **Opus** for the task-level plan (credential
-   delivery to an ephemeral VM is a real design question), then Sonnet to implement.
-2. **S1** planning pass (#7/#13, plus new **#32**) at the scanner's boundary. Model **Opus**.
+**Next action — SC, then S1. Model Sonnet for both** (the specs exist; execute them):
+
+1. **SC — extract `scope-core`.** Stand up `glunk-works/scope-core` from loop-orchestrator's
+   `tools/scope_validator` + `tools/ingest.sanitize`, re-point loop-orchestrator, **delete its
+   local copies**. Cross-repo, touches no bounty-infra `src/`. **Blocks S1.**
+2. **S1 — #7 + #13 + #32** at the scanner boundary, consuming `scope-core`.
+
+**SE** remains independent and unblocked if you'd rather do it first — but S1 was chosen
+2026-07-22 and S1's *scanner code* is deliberately substrate-neutral, so SE will not invalidate
+it (its IAM grant is a different story — see BI-D8's scope correction).
+
+**Two OPERATOR actions gate S1 actually working, neither of which a coder can do:**
+1. **The UA contact URL/email** (#32) — no default, and an unset contact is a deliberate startup
+   error so an anonymous scanner can't ship by accident. Must be real and reachable; its whole
+   purpose is giving an abuse desk somewhere to write.
+2. **The RoE document itself** — a hand-authored JSON object in S3 holding real program scope.
+   S1 ships the *mechanism*; until that object exists a fail-closed scanner correctly refuses to
+   scan anything. **"S1 merged" and "scans work again" are two separate events.**
 
 **Do not start the IaC security scan or the container image scan** — both are SG gates still
 pending (not part of the four just closed above) that should follow SE (see the ordering note
@@ -230,6 +247,79 @@ The roadmap's OPEN compute question is **resolved**. Full record in
 - **Sprint sequence gained SG (CI gate expansion) and SE (egress migration)**, and **S2's #11
   is re-scoped** — it targets a Fargate task role BI-D5 retires.
 
+## Just done (2026-07-22) — S1 planning pass (Opus, 5 micro-gates)
+
+Produced `sprints/S1_scanner_security_core/sprint_plan.md` +
+`sprints/SC_scope_core_extraction/sprint_plan.md`, and locked **BI-D6/D7/D8**. What surprised
+us, in rough order of how much it changed the plan:
+
+- **The record contradicted itself, and bounty-infra was the wrong half.** loop-orchestrator's
+  sprint-45 plan says its scope validator + ingestion sanitizer were "**built once here and
+  shared into the bounty loop**" and are "the concrete fix for `bounty-infra#7`/`#13`" — while
+  BI-D3/`CLAUDE.md` said bounty-infra must write its own. Owner overruled BI-D3's no-shared-code
+  clause → **BI-D6**: a dedicated `glunk-works/scope-core` package repo, both repos depend on
+  it, neither depends on the other. **Read the other repo's sprint plans, not just its code** —
+  the intent that resolved this was in prose, nowhere in the source.
+- **Validating the input domain does not close #7 — the real fix is a pipeline stage.**
+  `subfinder` enumerates from CT logs and passive DNS, which routinely return shared-CDN hosts,
+  vendor subdomains, and third-party-owned hosts; today every one of those is probed by `httpx`
+  and actively scanned by `nuclei` with no further check. So the scope check is a **filter
+  between subfinder and httpx**, not a `validate_target(args.domain)` at the top of `main()`.
+  This single finding is what turned S1 from a small change into a real sprint.
+- **BI-D7 — the two inputs are different kinds of thing.** The dispatched domain is an
+  *assertion of authority* (hard-fail, loud, before any subprocess); a discovered host is an
+  *observation* (drop, count, continue). Hard-failing everywhere was rejected because one stray
+  CDN hostname would kill valid scans until someone loosened the rules to make scans finish —
+  **a control people are motivated to disable is not a control.**
+- **BI-D8 — RoE moves to S3, not Infisical-at-runtime.** Handing the **scan VM** an Infisical
+  identity would park a secrets-manager credential on the most exposed, most disposable machine
+  in the system (BI-D5's whole point). S3 + existing KMS instead, Infisical holds only the
+  pointer; the rules then **never transit CI at all**, including the `containerOverrides` JSON
+  S0-T4 just hardened. Also survives BI-D5 untouched, since S3 + KMS are what AWS retains.
+- **The upstream code left us a note we'd have missed.** `ScopeViolation`'s message embeds the
+  candidate verbatim, and loop-orchestrator's own comment says a caller logging one from
+  attacker-influenceable text "should sanitize it first." bounty-infra is that caller — so
+  `sanitize()` must wrap the candidate before it hits a log line. It's in a **comment**, not the
+  API, which is exactly the kind of thing a reimplementation would have silently dropped.
+- **#32 folded into S1** — it lands on the same `run_recon_pipeline` argv the scope filter is
+  being inserted into, so splitting it means reopening that function for a handful of flags.
+
+**Then the plan was critiqued hard and revised (same day) — 17 findings, several were real
+defects in the plan, not just ambiguity.** The ones worth carrying forward:
+
+- **The RoE was specified as if one program = one ruleset. It isn't.** Operator runs
+  **HackerOne + Bugcrowd**; only H1 has a researcher API. → **BI-D9**: normalized JSON keyed by
+  program handle, using H1's *vocabulary* but not its API envelope (Bugcrowd must share the
+  file), and a **required `--program` handle** so selection is explicit. Never search-all —
+  a typo would silently borrow another program's authorization.
+- **Verifying the H1 API surfaced a second out-of-scope source** — `scope_exclusions` is its own
+  endpoint, separate from `eligible_for_submission: false`. Using only the latter would scan
+  explicitly-excluded assets while believing we were compliant. **Verify vendor APIs; don't
+  model them from memory.**
+- **I had designed a parser-differential vulnerability.** `sanitize()` NFKC-normalizes, and NFKC
+  rewrites hostnames (fullwidth `ｅxample.com` → `example.com`). Validating one form while
+  scanning another is a validate/use mismatch. Invariant now explicit: **sanitize is
+  display-only; validate and scan the exact same bytes.**
+- **One enforcement point on a three-hop pipeline.** httpx→nuclei was unguarded; safe only
+  because `httpx` doesn't follow redirects *today*. Adding `-follow-redirects` later would
+  bypass scope with no test failing. Now three enforcement points.
+- **The file's house style is except-and-continue** (`scanner.py:129-134`, `271-272`) — the
+  exact opposite of BI-D8's fail-closed requirement. A coder pattern-matching the file would
+  have silently defeated it.
+- **`TriageReport` is Gemini's `response_schema`** — the obvious place to put the drop count
+  would have changed what the model is asked to emit. Metadata goes to its own S3 artifact.
+- **The distribution mechanism could have blocked every merge.** `dependency-audit` and `sbom`
+  both scan the *installed environment* (deliberately not `skip-install`), and both became
+  required 2026-07-22. A GitHub-tarball dep is unknown to both → **smoke-test in a scratch venv
+  before committing to it.**
+- **`git+https://` would break the image build** — only the Go builder stage installs `git`
+  (`Dockerfile:3`); the runtime stage running `pip install .` has none. Tarball URL, not git URL.
+- **Wildcard→regex is the sharpest risk in S1**: `re.escape` the literal, **anchor both ends**
+  (scope-core uses `re.search`), apex excluded by default. Under-inclusive is safe;
+  over-inclusive is unauthorized scanning.
+- **Corrected an overclaim:** "S1 survives BI-D5 untouched" is true of the scanner code, **not**
+  the IAM grant — that attaches to a Fargate role BI-D5 retires.
+
 ## Just done (2026-07-22) — required-checks catch-up, PR #37
 
 - Precondition check first: `dependency-audit`/`sbom`/`secrets-scan`/`zizmor` all needed to be
@@ -374,6 +464,24 @@ Ran zizmor locally against `main` (post-#34) before touching anything: **46 find
   And before trusting this file's own "Now" section, or deleting any merged branch, run
   `git log origin/<branch> --not origin/main` to make sure nothing on it is still stranded.
 - Never commit to `main`, never merge your own PR, never force-push a pushed branch.
+- **A squash-merge makes SHA-absence meaningless as a stranded-commit test.** `git log
+  origin/<branch> --not origin/main` and `git merge-base --is-ancestor` both report *every*
+  commit on *every* squash-merged branch as "not in main" — the squash mints a new SHA for the
+  whole branch. Both gave false positives on 2026-07-22. Compare **content**
+  (`diff --strip-trailing-cr`) or compare the branch's last commit **timestamp** against the
+  PR's `mergedAt`; that is the check the gotcha above actually means.
+- **`re.search`, not `re.match`, in `scope-core`.** Scope patterns are unanchored by design, so
+  `example\.com` also matches `example.com.attacker.net`. Real RoE entries must anchor
+  (`^example\.com$`). This is the most likely way a correct scope implementation still ends up
+  scanning the wrong host, and it will not show up in any test that uses tidy fixtures.
+- **`global-bootstrap` has no CI and applies only from a local terminal** — S1's
+  `s3:GetObject`/`kms:Decrypt` grant lives there. A merged PR there is *code, not effect*.
+  This has now blocked a workflow **three times** (T2 twice, T4 once); expect S1 Task 1's first
+  real run to fail with AccessDenied and budget the manual apply.
+- **"S1 merged" and "scans work again" are two separate events.** S1 ships the *mechanism*;
+  the S3 object holding real program scope is an **operator action**. Until it exists, a
+  fail-closed scanner correctly refuses to scan anything — right behavior, surprising at
+  dispatch time if you haven't planned for it.
 - **Read a hosting provider's AUP text before assuming it tolerates scanning — provider size
   is not the variable.** Hetzner, the default cheap-VPS recommendation, explicitly prohibits
   "scanning of foreign networks or foreign IP addresses." The distinction that matters is
