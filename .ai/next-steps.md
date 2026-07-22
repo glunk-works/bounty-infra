@@ -212,14 +212,84 @@ branch head (`3a3144c`), same reasoning as `v0.1.0` — the ruleset means conten
   API showed **0**, and `git add --renormalize` agreed. No `.gitattributes` was needed and none
   was committed.
 
-**Next action: start session 5 (Opus) — T4, adopt the plugin here.** Three files:
-`.ai/project.yml` (values verified against the **live** ruleset, not copied from the sprint plan
-or from `project-schema.md`'s example — the example was written from the plan), `.claude/settings.json`
-(marketplace pinned to the **`v0.2.0` tag**, `enabledPlugins`, the deny-list), and the slimmed
-`CLAUDE.md`. The sprint plan's § *Session plan* carries the verbatim kickoff prompt. `/clear`
-first. **This repo still has no `/resume`/`/handoff`** — until Task 4 lands, this file is the
-handoff protocol, run by hand: `/clear` between every session, and **every session ends by
-updating this file**. A session that ends without writing it strands the next one.
+**Task 4 done 2026-07-22 (Opus, session 5) — the plugin is adopted here.** PR:
+[bounty-infra#48](https://github.com/glunk-works/bounty-infra/pull/48) (`sprint/SW-t4-adopt` →
+`main`), **open, unmerged**. All three claude-workbench PRs (#1/#2/#3) were **already merged** by
+the time this session started — the note above saying #3 was open was stale.
+
+- **`.ai/project.yml` values were verified against the repo, not copied.** The `ruleset` block
+  came from a live `gh api .../rules/branches/main` read: 4 rule types, 8 contexts — which
+  happens to match `project-schema.md`'s worked example, but that example was written *from* the
+  sprint plan, so trusting it would have been circular. One deliberate exclusion: **`pr-title` is
+  not in `required_checks`** — it runs on every PR but does not gate, and listing it would make
+  `/pr-checks` report a gate that is not one.
+- **`CLAUDE.md` landed at 8.8 KB, not the plan's ~5 KB — owner confirmed before pushing.** The
+  gap is arithmetic, not slack: the two absorbed sections total ~2.5 KB and the new
+  plugin-pointer paragraph costs ~0.7 KB back. 5 KB is only reachable by deleting local truth,
+  and the sole block big enough is § *Local: GitHub Actions security* (8 rules, incl. the
+  OIDC-subject precedence rule) — exactly the always-on content that has already prevented real
+  incidents here. **The plan's size target was wrong; its actual criterion — what remains is all
+  local truth — is met.** Rejected alternatives: demoting that section to `docs/` (it stops being
+  always-on precisely when it matters, mid-workflow-edit) and compressing the rules to one-liners
+  (the "why" is what stops them being re-litigated).
+- **Three stale claims were corrected rather than carried into the slimmed file**: required
+  status checks *are* configured (8, not "not yet"); #6 is fixed; and the RoE lives in **S3, one
+  object per engagement** (BI-D8/D9), not "Infisical, runtime config" — that one was actively
+  misleading, and it sat in § *what must not be committed*.
+- **Deny-list carries `PowerShell(...)` duplicates of each `Bash(...)` rule**, because sessions
+  here run on Windows and reach for the PowerShell tool by default — a `Bash`-only deny leaves
+  `git push --force` reachable through the other tool. **The `PowerShell` form is unverified**; if
+  the matcher ignores it, it is inert rather than harmful. Confirm in Task 5. No allow-list was
+  ported: Task 4 specifies the deny-list only, and loop-orchestrator's `Bash(...)` entries would
+  not match this platform's default tool anyway.
+- **A T5 finding already, found while reading `/resume`:** it expects `.ai/state.json`, the
+  machine cursor — which this repo **gitignores on purpose** ("session-local scratch state") and
+  does not have at all. The skill handles the absence explicitly and degrades to
+  `next-steps.md`-only, at the cost of never auto-starting. That is a clean fail-closed path, so
+  it is not a defect; but *"is a machine cursor structural or optional?"* is exactly the kind of
+  seam Task 5 exists to disposition (schema key vs. not-portable).
+
+**T4's fresh-session acceptance test PASSED, run for real 2026-07-22 (Sonnet, in a genuinely
+fresh session, no local-checkout escape hatch)** — all 7 skills listed, all 4 agents spawnable
+(verified by actually spawning `way-of-working:architect`, which cold-read `.ai/project.yml` and
+reported bounty-infra's own values, not loop-orchestrator's), and `/way-of-working:resume` read
+this repo's cursor and reported the real 8-check ruleset. The GitHub-source marketplace install
+(`ref: v0.2.0` in `.claude/settings.json`) worked with no CLI/cache friction this time.
+
+**Task 5, session 6 done 2026-07-22 (Sonnet) — the real-work exercise ran, and it was NOT a
+clean pass: 5 findings, logged verbatim.** Full log:
+`sprints/SW_way_of_working/task5_session6_findings.md`. Summary: `/way-of-working:resume` and
+`/way-of-working:handoff` both still hardcode loop-orchestrator-shaped values instead of reading
+them from `.ai/project.yml` — a stale required-checks example list (F1), a hardcoded
+`docs/migration_roadmap.md` path that doesn't exist here (F2), and three hardcoded references to
+a nonexistent `.ai/context/` directory (F3/F4). `/way-of-working:critic-gate`'s docs-consistency
+trigger phrasing is ambiguous for a new, untracked doc (F5). None of these were caught by the
+Task 3b coupling grep, because that grep only matches repo/org name strings, not arbitrary
+hardcoded paths — a real gap in what "zero hits" proved. **Positive confirmations, also
+logged:** `code_paths` correctly classified this diff as docs-only, and the live agent spawn
+above proved WB-D5's cold-read design.
+
+**The real work-product itself — `docs/roe_operator_runbook.md` (the S1 operator runbook + RoE
+template, unblocking the UA/RoE gate below) and the findings log — is deliberately left
+UNCOMMITTED at session end**, per the sprint plan's own `/resume -> work -> /critic-gate ->
+/handoff -> fresh session -> /ship` sequence: shipping happens in the next, genuinely fresh
+session, to test that boundary too. `.ai/state.json` now exists (gitignored, local-only) with
+`next_action` pointing at that ship step.
+
+**Next action: fresh session → `/way-of-working:resume` (expect a dirty-tree note — that's
+intentional, not a stranded handoff) → `/way-of-working:ship` the two new files as one PR.** Then
+**Task 5, session 7 (Opus)**: read `task5_session6_findings.md` and disposition each of the 5
+findings as *new schema key* (fix in `claude-workbench`) or *never portable* (revert to
+repo-local) — per-finding reasoning, not a bulk call. No HITL gate is open; the gate is the
+human's merge of whatever PR(s) come out of session 7's fixes.
+
+**Until #48 merges, this file's format stays as-is (deep narrative, not the lean ~20-40 line
+cursor `/way-of-working:handoff` calls for)** — a deliberate, asked-for choice this session:
+collapsing 893 lines of history the roadmap doesn't fully duplicate felt like the wrong call to
+make unprompted, and the file's own long-standing condition for that transition ("until #48
+merges and a fresh session proves the skills load") hasn't fully closed yet (the *proving* part
+just happened; the *merging* part hasn't). Revisit at the session that actually merges #48.
+`/clear` between every session, and **every session ends by updating this file**.
 
 **S1 merged 2026-07-22** ([#41](https://github.com/glunk-works/bounty-infra/pull/41), squash
 commit `eaf8038`) — but with the **single-shared-RoE-document** design, not the per-engagement
