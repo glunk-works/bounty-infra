@@ -65,17 +65,30 @@ yields to the CLI flag). Confirmed by reading `pkg/protocols/http/build_request.
 repo — templates are unpinned third-party content (`src/Dockerfile`) — documented in code and
 here rather than silently claimed as airtight.
 
-**Two NEW operator/cross-repo gates surfaced by implementing S1** (in addition to the one
-already known):
+**The sprint plan's IAM-grant claim was wrong — checked, not assumed, and no PR is needed.**
+The plan said "S1's `s3:GetObject`/`kms:Decrypt` grant lives in `global-bootstrap`," extrapolated
+from the T2 (OIDC role)/T4 (`ecs:DescribeTasks`) precedents — but those were both about the
+**GitHub Actions CI role** (`aws_iam_role.github_actions_role["bounty-infra"]`, defined in
+`global-bootstrap/project_policies.tf`). The RoE grant is a different principal entirely: the
+**ECS task role** the scanner container assumes at runtime (`aws_iam_role.task_role`,
+`infra/main.tf:97`), which already carries `s3:GetObject`+`kms:Decrypt` on the **whole findings
+bucket** (`arn:aws:s3:::${var.findings_bucket_name}/*`, bucket-wide, no prefix restriction) via
+the existing `s3_write_policy` — because that role already reads/writes findings there.
+`global-bootstrap` owns the bucket + KMS key (`aws_s3_bucket.findings_bucket` /
+`aws_kms_key.findings_key`, outputs `findings_bucket_name`/`findings_kms_key_arn`), but grants
+access to neither role from there.
+**Conclusion: store the RoE object in the SAME findings bucket** (convention:
+`roe/scope.json`) and **no IAM change is needed anywhere** — not `global-bootstrap`, and not
+`infra/main.tf` either (which BI-D5 freezes anyway, so this is also the change that respects
+that freeze rather than needing an exception to it). `ROE_SCOPE_URI` becomes
+`s3://<findings-bucket-name>/roe/scope.json`.
 
-1. **Infisical needs a new secret.** `ROE_SCOPE_URI` (the RoE object's `s3://bucket/key`
-   pointer — BI-D8: Infisical holds the pointer, never the scan VM) must be added to
-   `/bounty-infra` (prod) before `run-scan.yml` can dispatch a scan. Not yet added — this
-   session has no Infisical write access.
-2. **`global-bootstrap` needs the IAM grant** (`s3:GetObject` on the RoE key + `kms:Decrypt`)
-   attached to the scanner's task role — same "code exists there, effect requires a local
-   `tofu apply`" shape as every prior IAM grant this project has needed (T2, T4). PR not yet
-   opened at cursor-write time — next action.
+**One NEW operator/cross-repo gate remains, from the corrected picture above:**
+
+1. **Infisical needs a new secret.** `ROE_SCOPE_URI` (BI-D8: Infisical holds the pointer, never
+   the scan VM), value `s3://<findings-bucket-name>/roe/scope.json` per the correction above,
+   must be added to `/bounty-infra` (prod) before `run-scan.yml` can dispatch a scan. Not yet
+   added — this session has no Infisical write access.
 
 **One OPERATOR action still gates S1 actually working end-to-end, unchanged from the planning
 pass, and a coder cannot do it:**
