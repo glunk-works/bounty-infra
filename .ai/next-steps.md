@@ -6,32 +6,48 @@ Regenerate this at the end of every working session.
 
 ## Now
 
-**Session 6 (Sonnet, T5) SHIPPED — cursor corrected 2026-07-22 (Opus). The next action is
-session 7 (Opus): disposition the findings.** A prior session's `state.json` still read "confirm
-the dirty tree, then `/ship` both files" — that ship is **already done**: `docs/roe_operator_runbook.md`
-+ `sprints/SW_way_of_working/task5_session6_findings.md` are committed (`008911c`) and open as
-**[#49](https://github.com/glunk-works/bounty-infra/pull/49)** (all 10 checks green, MERGEABLE).
-`last_commit` was pointing at `cb6d698`, which is **PR #48's** head, not this branch's tip — now
-fixed to `008911c`.
+**Session 7 (Opus, T5) DONE — the six findings are dispositioned and landed as a claude-workbench
+PR. SW's remaining work is now one human merge + a repo-side pin bump; #19 closes when those land.**
+Disposition PR: **[claude-workbench#4](https://github.com/glunk-works/claude-workbench/pull/4)**
+(`sprint/SW-t5-disposition` → `main`, both CI checks green, **open, awaiting human merge**),
+recorded upstream as **WB-D6**.
 
-**Two work-product PRs are open and await the human's merge, in this order:**
-- **[#48](https://github.com/glunk-works/bounty-infra/pull/48)** — `docs(SW): adopt the way-of-working
-  plugin (T4)` (commits `45280f7` + `cb6d698`; the plugin adoption itself, **not yet in `main`**).
-- **[#49](https://github.com/glunk-works/bounty-infra/pull/49)** — session-6 runbook + findings log
-  (`008911c`; cut from `main` **independently** of #48 — its only non-main commit is `008911c`, so
-  it carries none of #48's T4 changes).
+**The reconciliation that reshaped this session — F1–F4 were a stale-cache mirage, not real
+portability bugs.** The findings quote loop-orchestrator literals, but the harness was serving a
+**stale `v0.1.0` local checkout** (`…/Temp/cw_tag_checkout`, verified `git describe` → `v0.1.0`)
+even though `.claude/settings.json` pins **`v0.2.0`**. `v0.1.0` is the Task-2 skeleton (skills
+copied as-is, coupled on purpose); the generalization that fixes F1–F4 — `{roadmap}`,
+`{ruleset.required_checks}`, `{models}`, `reference/workflow.md` — already shipped in `v0.2.0`
+(confirmed via `git show v0.2.0:…/resume/SKILL.md`). So session 6 (and this session's own
+`/resume`) reproduced F1–F4 only because the loaded skill was the un-generalized skeleton, not the
+pinned tag. **The real F1–F4 defect is operational (stale plugin cache), fixed repo-side below.**
 
-**Then session 7 (Opus, T5 disposition):** read `sprints/SW_way_of_working/task5_session6_findings.md`
-and disposition each of its **six** findings (F1–F6 — the log's intro line still says "five",
-written before F6 was appended) exactly one of two ways: a **new schema key** (upstream fix in
-claude-workbench) or **not portable** (skill goes repo-local; say what WB-D4 got wrong). Overriding
-locally in bounty-infra is not a third option (BI-D11). F1–F4 share one root cause — the coupling
-grep only catches leaked *repo/org names*, so hardcoded *paths/values* (`docs/migration_roadmap.md`,
-`.ai/context/*`, loop-orchestrator's 8 required-check names) sailed through "zero hits." F5/F6 are
-scope/phrasing questions, not value bugs. Land the schema changes as a claude-workbench PR
-(human-merged), record reasoning per finding, then update this cursor to close SW and point at
-loop-orchestrator's adoption sprint. **#19 closes there.** The verbatim session-7 kickoff is in the
-sprint plan's § *Session 7*.
+Per-finding disposition (full reasoning in claude-workbench `docs/decisions.md` § WB-D6):
+- **F1–F4** — already-fixed-upstream in `v0.2.0` via existing schema keys; **no plugin change**.
+- **Root cause guard** — `scripts/coupling-check.sh` gained a **Tier 3** of structural literal
+  *shapes* (`docs/<…>roadmap.md`, `.ai/context/<file>.md`) so a hardcoded *path* that isn't a
+  repo name is caught next time; bare `.ai/context/` stays legitimate; check *names* stay excluded
+  (they appear in `/pr-checks` example output — caught instead by reading `{ruleset.required_checks}`).
+- **F5** — `/critic-gate` gained a **new-doc proposal row** (a newly-added doc not yet in
+  `{load_bearing_docs}` → `docs-consistency`, plus `security-critic` for a security/operational
+  procedure). Derives from `git --diff-filter=A`; **no new schema key**.
+- **F6** — `/handoff` step 5 **clarified, not exempted**: the finding's "a `{pr_base}`-cut branch
+  can't carry the edit" rationale is wrong because `.ai/next-steps.md` is regenerated wholesale, so
+  a base-cut branch always applies — no permissive code-branch exception.
+
+**NEXT — a HITL gate is OPEN: the human merges [claude-workbench#4](https://github.com/glunk-works/claude-workbench/pull/4).**
+Then, post-merge (owner chose *bump pin + clear checkout*; assign Opus/Architect to also kick off
+Phase 4):
+1. Cut a new tag on claude-workbench (`v0.3.0`) at the merged head.
+2. Bump this repo's `.claude/settings.json` marketplace `ref` `v0.2.0` → `v0.3.0`, **and delete the
+   stale `…/Temp/cw_tag_checkout`** so the harness re-fetches — this is what actually closes the
+   F1–F4 lived experience. Verify by re-running `/resume` and confirming the loaded `/resume` text
+   reads `{roadmap}`/`{ruleset.required_checks}`, not the loop-orch literals.
+3. Land the pin bump as a bounty-infra docs/settings PR; on merge, **SW closes and #19 closes**.
+4. Point the cursor at **loop-orchestrator adoption (Phase 4)** — planned *in that repo* (delete
+   its 7 local skills + 4 shared agents, add `project.yml` + settings, keep
+   `mutation-triage`/`live-verify` local, land Task 6's drift guard). See the sprint plan's
+   § *Follow-on*.
 
 ---
 
