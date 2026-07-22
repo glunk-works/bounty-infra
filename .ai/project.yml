@@ -1,0 +1,87 @@
+# .ai/project.yml — bounty-infra's parameterization of the `way-of-working` plugin.
+#
+# The plugin's skills and agents are portable and may never name a repo-specific value;
+# where behavior needs one they read it from here. The contract, key by key, is
+# `reference/project-schema.md` inside the plugin — read that before adding a key, and note
+# its central rule: when a shared skill assumes something untrue about this repo, the fix is
+# a new schema key or the skill was never portable. Overriding a skill locally is not an
+# option — a repo-local `.claude/skills/<name>/` shadows the plugin's copy entirely and
+# silently stops receiving upstream fixes.
+#
+# Every value below was verified against this repo as it actually is, not copied from the
+# SW sprint plan or from project-schema.md's worked example (which was written *from* the
+# plan). The ruleset block in particular was read live from the GitHub API on 2026-07-22.
+
+# ── identity ─────────────────────────────────────────────────────────────────
+repo: glunk-works/bounty-infra
+pr_base: main
+
+# ── the deep record ──────────────────────────────────────────────────────────
+roadmap: docs/hardening_roadmap.md
+sprints_dir: sprints
+
+# The roadmap is also the threat model: posture, trust boundaries, and the public-repo
+# data-handling rules all live in it. There is no separate threat_model.md and inventing a
+# path to one would point security-critic at a file that does not exist.
+threat_model: docs/hardening_roadmap.md
+
+decisions:
+  log: docs/hardening_roadmap.md   # BI-D1..BI-D13 are recorded there.
+  prefix: BI-D
+
+backlog:
+  kind: github_issues              # this repo has no backlog file; findings are issues.
+  path: null
+  item_prefix: null
+
+# docs-consistency's audit set. README.md is deliberately absent: CLAUDE.md already records
+# that it predates the current architecture and is not trusted over the roadmap, so auditing
+# it would re-report known-stale claims (#11 and the phantom build-and-push.yml) every pass.
+load_bearing_docs:
+  - CLAUDE.md
+  - docs/hardening_roadmap.md
+  - .ai/next-steps.md
+  - sprints/**/sprint_plan.md
+
+# ── what counts as a behavior change ─────────────────────────────────────────
+code_paths:
+  - src/
+  - infra/
+  - .github/workflows/
+
+# ── the local green gate ─────────────────────────────────────────────────────
+# A local pre-check, not the gate of record — CI on the PR is. Mirrors CLAUDE.md § Commands.
+# `tofu validate` runs with -backend=false on purpose so it needs no AWS credentials.
+gates:
+  green:
+    - { cwd: src,   run: hatch run lint:check }
+    - { cwd: src,   run: hatch run test:run }
+    - { cwd: infra, run: tofu fmt -check -recursive }
+    - { cwd: infra, run: "tofu init -backend=false && tofu validate" }
+
+# ── branch protection ────────────────────────────────────────────────────────
+# Read live from `gh api repos/glunk-works/bounty-infra/rules/branches/main` on 2026-07-22:
+# 4 rule types, 8 required contexts. `pr-title` runs on every PR but is deliberately NOT
+# required (title format is a convention, not a security or correctness gate) — so it must
+# not appear here, or /pr-checks would report a gate that does not gate.
+ruleset:
+  name: protected-integration-branches
+  rule_types: [deletion, non_fast_forward, pull_request, required_status_checks]
+  required_checks: [lint, test, tofu-validate, tofu-plan,
+                    dependency-audit, sbom, secrets-scan, zizmor]
+
+# ── the fresh-session review gate ────────────────────────────────────────────
+# null is a decision, not a gap: this repo has no review CI check. Its critic pass is
+# /critic-gate, run locally before the PR — which makes that pass the only critic look a
+# diff gets before the human's merge click.
+review:
+  ci_gate: null
+
+# ── agents ───────────────────────────────────────────────────────────────────
+# `models` governs *session* routing (which model a person should be running), not what a
+# spawned subagent runs as — an agent's model comes from its own frontmatter upstream.
+agents:
+  enabled: [architect, coder, security-critic, docs-consistency]
+models:
+  architect: opus
+  coder: sonnet
