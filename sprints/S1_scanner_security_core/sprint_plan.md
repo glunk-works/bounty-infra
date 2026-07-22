@@ -239,14 +239,26 @@ the system, and an H1 token can read programs and file reports.
 - **Task 4: Traffic attribution + rate limiting (#32)**
   - **Description:** An identifying **User-Agent** and conservative rate/concurrency limits on
     `httpx` and `nuclei`.
-  - **UA shape:** `bounty-scanner/<version> (+<CONTACT>)` — the established bot convention
-    (`+URL`, as Googlebot et al. use), with an RFC 9110 `product/version` token.
-    **`<CONTACT>` is operator-supplied and has no default** — an unset contact is a **startup
-    error**, so an anonymous scanner cannot ship by accident. It must be **resolvable**: its
-    whole purpose is giving an abuse desk somewhere to write instead of filing a complaint.
-    A HackerOne profile URL is ideal — self-authenticating, and it demonstrates to a receiving
-    SOC that this is a real researcher doing authorized testing.
-    *(⚠ Owner action, still outstanding: supply the handle/URL.)*
+  - **UA — locked 2026-07-22:**
+
+    ```
+    bounty-scanner/<version> (+https://hackerone.com/seuss)
+    ```
+
+    The established bot convention (`+URL`, as Googlebot et al. use) with an RFC 9110
+    `product/version` token. The contact is the operator's HackerOne profile —
+    self-authenticating, and it demonstrates to a receiving SOC that this is a real researcher
+    doing authorized testing rather than an attack.
+  - **Derive `<version>` from package metadata** (`importlib.metadata.version("bounty-scanner")`),
+    never a hardcoded literal. A hardcoded string drifts silently, and a UA claiming a version
+    the build isn't is worse than no version at all — the whole point is correlating a complaint
+    to an image.
+  - **The contact URL still has no default and an unset contact is a startup error**, so an
+    anonymous scanner cannot ship by accident even though a value is now chosen.
+  - **⚠ Confirm `https://hackerone.com/seuss` actually resolves before shipping.** It could not
+    be verified programmatically — H1 profile pages are JS-rendered, so a fetch returns only the
+    page shell, which is not evidence either way. A contact URL that 404s is **worse than no
+    contact**: it reads as a forged attempt at looking legitimate. Eyeball it once.
   - **Platform-neutral by design — do NOT lead with a platform brand.** A UA in the shape
     `HackerOne-…` was proposed and rejected: putting a platform's name in the product-token
     position implies the traffic originates from **HackerOne Inc.**, which (a) creates a problem

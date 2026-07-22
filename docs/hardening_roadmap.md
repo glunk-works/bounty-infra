@@ -326,10 +326,13 @@ exist and claims "least privilege IAM" that #11 contradicts — fold into a docs
     was proposed and rejected: a platform name in the product-token position implies the traffic
     originates from **HackerOne Inc.**, which creates a problem with the platform if a target
     complains about traffic branded as theirs, and is simply wrong when the selected program is a
-    Bugcrowd one. Identify *with* a platform via a resolvable contact URL; never *as* one. Shape:
-    `bounty-scanner/<version> (+<contact-url>)` — RFC 9110 product token plus the established
-    `+URL` bot convention. **An unset contact is a startup error**, so an anonymous scanner
-    cannot ship by accident.
+    Bugcrowd one. Identify *with* a platform via a resolvable contact URL; never *as* one.
+    Locked: `bounty-scanner/<version> (+https://hackerone.com/seuss)` — RFC 9110 product token
+    plus the established `+URL` bot convention, contact being the operator's H1 profile
+    (self-authenticating; shows a receiving SOC this is a real researcher). `<version>` is read
+    from **package metadata**, never hardcoded — a UA claiming a version the build isn't is worse
+    than none. **An unset contact remains a startup error**, so an anonymous scanner cannot ship
+    by accident.
 
 ## Cross-repo coupling
 
