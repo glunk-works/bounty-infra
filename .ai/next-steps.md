@@ -11,12 +11,21 @@ architecture pass is also done — BI-D5 is locked** (2026-07-21): scan egress l
 per-scan ephemeral VMs on **Vultr**; AWS keeps the control plane. See
 `docs/hardening_roadmap.md` § *RESOLVED — compute-model architecture decision*.
 
-**SG-partial is done — three PRs, all merged or ready** (2026-07-21): `dependency-audit`,
-`sbom`, `pr-title` (#34, merged); `zizmor` + full action pinning + `persist-credentials: false`
-(#35, merged); `secrets-scan` (#36, all 10 checks green, awaiting merge) — `GITLEAKS_LICENSE`
-landed as a `glunk-works` org secret. `ci.yml` now runs 9 jobs on every PR:
-`lint`/`test`/`package`/`tofu-validate`/`tofu-plan`/`dependency-audit`/`sbom`/`secrets-scan`/
-`zizmor`, plus `pr-title` in its own workflow.
+**SG-partial is done — three PRs, all merged** (2026-07-21): `dependency-audit`, `sbom`,
+`pr-title` (#34); `zizmor` + full action pinning + `persist-credentials: false` (#35);
+`secrets-scan` (#36) — `GITLEAKS_LICENSE` landed as a `glunk-works` org secret. `ci.yml` now
+runs 9 jobs on every PR: `lint`/`test`/`package`/`tofu-validate`/`tofu-plan`/`dependency-audit`/
+`sbom`/`secrets-scan`/`zizmor`, plus `pr-title` in its own workflow.
+
+**Required-checks list caught up to match, same day** (2026-07-22): confirmed
+`dependency-audit`/`sbom`/`secrets-scan`/`zizmor` green directly on `main`'s HEAD commit (via
+the check-runs API, not just their own PRs), then added all four to the
+`protected-integration-branches` required-status-checks list in one batch — PR #37 first
+extended `ruleset-drift.yml`'s taxonomy to match (merged), *then* the live ruleset was updated
+(never require a check the drift guard doesn't also watch). Verified via `workflow_dispatch`:
+`ruleset-drift` reports `OK: ruleset intact — 4 rule types, 8 required checks.` `pr-title`
+stays deliberately ungated — same BL-10 reasoning, unaffected by the three other SG additions
+landing alongside it (confirmed by owner).
 
 **Next action — pick one of two, they are independent:**
 
@@ -24,17 +33,9 @@ landed as a `glunk-works` org secret. `ci.yml` now runs 9 jobs on every PR:
    delivery to an ephemeral VM is a real design question), then Sonnet to implement.
 2. **S1** planning pass (#7/#13, plus new **#32**) at the scanner's boundary. Model **Opus**.
 
-**Do not start the IaC security scan or the container image scan** — both are SG gates that
-should follow SE (see the ordering note in the roadmap's sprint sequence).
-
-**Once #34/#35/#36 have all reported green on `main` (not just on their own PRs), add
-`dependency-audit`, `sbom`, `secrets-scan`, and `zizmor` to the required-checks list** on the
-`protected-integration-branches` ruleset in one batch (same discipline as ever: never require a
-check that hasn't reported yet) — and update `ruleset-drift.yml`'s taxonomy in the same change,
-or the drift guard flags itself as out of sync with what it's supposed to watch. `pr-title` was
-deliberately left off that list before (loop-orchestrator's BL-10 lesson: a title-only check
-gating nothing is fine ungated) — decide whether the same reasoning still applies now that it's
-one of several SG additions, or whether it should join the others.
+**Do not start the IaC security scan or the container image scan** — both are SG gates still
+pending (not part of the four just closed above) that should follow SE (see the ordering note
+in the roadmap's sprint sequence).
 
 | Task | State |
 |---|---|
@@ -228,6 +229,40 @@ The roadmap's OPEN compute question is **resolved**. Full record in
   abuse complaint being filed."
 - **Sprint sequence gained SG (CI gate expansion) and SE (egress migration)**, and **S2's #11
   is re-scoped** — it targets a Fargate task role BI-D5 retires.
+
+## Just done (2026-07-22) — required-checks catch-up, PR #37
+
+- Precondition check first: `dependency-audit`/`sbom`/`secrets-scan`/`zizmor` all needed to be
+  confirmed green **directly on `main`**, not just on #34/#35/#36's own PR runs — `ci.yml` only
+  triggers on `pull_request` (no `push`), so there's no separate "run on main" event to point
+  to. Resolved by querying `GET /repos/.../commits/{sha}/check-runs` against `main`'s HEAD
+  commit directly: GitHub carries check-runs forward from a PR's head commit onto the new
+  squash-merge commit on the base branch, so this is a real, checkable signal, not an
+  assumption. All four came back `success`.
+- **PR #37**: extended `ruleset-drift.yml`'s `missing_checks` taxonomy from 4 to 8
+  (`lint`/`test`/`tofu-validate`/`tofu-plan` + the four above), merged before touching the live
+  ruleset — same T3(e) discipline of never letting the drift guard and the ruleset it watches
+  drift apart.
+- Live `protected-integration-branches` ruleset (id `19438326`) updated via `gh api --method
+  PUT` with the full ruleset body (fetched current state first, changed only the
+  `required_status_checks` array, left `pull_request`/`deletion`/`non_fast_forward` and
+  `bypass_actors` untouched) — same PUT-the-whole-object approach as every other ruleset edit
+  this repo has done, since the endpoint has no PATCH-a-single-rule affordance.
+- **`pr-title` decision**: asked the owner explicitly rather than assume — same BL-10 reasoning
+  holds (title-format convention isn't a security/correctness gate), confirmed to stay ungated
+  even with three more security gates landing alongside it.
+- Verified via `workflow_dispatch` (run 29879933161, not just read back the API response):
+  `ruleset-drift` logs `OK: ruleset intact — 4 rule types, 8 required checks.`
+- **Also chased down a false stranded-commit alarm**: `git log origin/ci/secrets-scan --not
+  origin/main` showed `5bc6ca0` (the cursor update recording secrets-scan's landing) as absent
+  from `main` — looked exactly like the recurring "pushed after merge" incident logged
+  elsewhere in this file. It wasn't: `5bc6ca0`'s author timestamp was *before* PR #36's merge
+  timestamp, so it rode the squash-merge in under a new SHA; `diff --strip-trailing-cr` against
+  `origin/main`'s copy of this file confirmed byte-for-byte identical content. **The
+  stranded-commit check is timestamp-relative, not "is this exact SHA an ancestor of
+  main"** — a squash always mints a new SHA for every commit on the branch, merged or not, so
+  SHA-absence alone isn't evidence of loss; compare content or compare timestamps against the
+  merge time.
 
 ## Just done (2026-07-21) — secrets-scan (gitleaks), PR #36, closing SG-partial
 
