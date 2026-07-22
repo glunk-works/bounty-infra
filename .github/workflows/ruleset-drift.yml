@@ -48,7 +48,7 @@ jobs:
           ' <<<"$rules")
 
           missing_checks=()
-          for c in lint test tofu-validate tofu-plan; do
+          for c in lint test tofu-validate tofu-plan dependency-audit sbom secrets-scan zizmor; do
             if ! jq -e --arg c "$c" 'index($c) != null' <<<"$contexts" >/dev/null; then
               missing_checks+=("$c")
             fi
@@ -66,4 +66,4 @@ jobs:
             exit 1
           fi
 
-          echo "OK: ruleset intact — 4 rule types, 4 required checks."
+          echo "OK: ruleset intact — 4 rule types, 8 required checks."
