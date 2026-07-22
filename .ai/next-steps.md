@@ -6,11 +6,21 @@ Regenerate this at the end of every working session.
 
 ## Now
 
-**Session 7 (Opus, T5) DONE — the six findings are dispositioned and landed as a claude-workbench
-PR. SW's remaining work is now one human merge + a repo-side pin bump; #19 closes when those land.**
-Disposition PR: **[claude-workbench#4](https://github.com/glunk-works/claude-workbench/pull/4)**
-(`sprint/SW-t5-disposition` → `main`, both CI checks green, **open, awaiting human merge**),
-recorded upstream as **WB-D6**.
+**Session 7 (Opus, T5) DONE — SW is complete. The six findings are dispositioned, the plugin fix is
+merged and tagged `v0.3.0`, and this repo's pin is bumped to it. This PR ([#50](https://github.com/glunk-works/bounty-infra/pull/50))
+carries the pin bump + this cursor; on its merge, SW closes and #19 closes.** Disposition PR:
+**[claude-workbench#4](https://github.com/glunk-works/claude-workbench/pull/4) — MERGED** (`35229dc`),
+recorded upstream as **WB-D6**; tagged **`v0.3.0`** on the merged head.
+
+**Post-merge follow-through, done this session (Opus):**
+- **`v0.3.0` cut** on claude-workbench `main` (`35229dc`), pushed and verified to resolve to the
+  merged head.
+- **Pin bumped** — `.claude/settings.json` marketplace `ref` `v0.2.0` → `v0.3.0` (in this PR).
+- **Stale checkout cleared** — deleted `…/Temp/cw_tag_checkout` (was pinned to `v0.1.0`, confirming
+  the mirage); the harness re-clones `v0.3.0` on next plugin load. Verified the `v0.3.0` tag content
+  directly: `resume/SKILL.md` has 4 `{key}` refs and **0** loop-orch literals, and the
+  `/critic-gate` new-doc row is present. **Final end-to-end proof is the next fresh session's
+  `/resume`** loading `v0.3.0` (a harness command this session cannot self-invoke).
 
 **The reconciliation that reshaped this session — F1–F4 were a stale-cache mirage, not real
 portability bugs.** The findings quote loop-orchestrator literals, but the harness was serving a
@@ -35,19 +45,17 @@ Per-finding disposition (full reasoning in claude-workbench `docs/decisions.md` 
   can't carry the edit" rationale is wrong because `.ai/next-steps.md` is regenerated wholesale, so
   a base-cut branch always applies — no permissive code-branch exception.
 
-**NEXT — a HITL gate is OPEN: the human merges [claude-workbench#4](https://github.com/glunk-works/claude-workbench/pull/4).**
-Then, post-merge (owner chose *bump pin + clear checkout*; assign Opus/Architect to also kick off
-Phase 4):
-1. Cut a new tag on claude-workbench (`v0.3.0`) at the merged head.
-2. Bump this repo's `.claude/settings.json` marketplace `ref` `v0.2.0` → `v0.3.0`, **and delete the
-   stale `…/Temp/cw_tag_checkout`** so the harness re-fetches — this is what actually closes the
-   F1–F4 lived experience. Verify by re-running `/resume` and confirming the loaded `/resume` text
-   reads `{roadmap}`/`{ruleset.required_checks}`, not the loop-orch literals.
-3. Land the pin bump as a bounty-infra docs/settings PR; on merge, **SW closes and #19 closes**.
-4. Point the cursor at **loop-orchestrator adoption (Phase 4)** — planned *in that repo* (delete
-   its 7 local skills + 4 shared agents, add `project.yml` + settings, keep
-   `mutation-triage`/`live-verify` local, land Task 6's drift guard). See the sprint plan's
-   § *Follow-on*.
+**NEXT — HITL gate OPEN: the human merges [#50](https://github.com/glunk-works/bounty-infra/pull/50)**
+(this PR: pin bump `v0.3.0` + cursor). On merge, **SW closes and #19 closes** — nothing else in
+bounty-infra gates on it.
+
+**Then the next sprint is loop-orchestrator adoption (Phase 4), planned *in that repo*** (not here):
+delete its 7 local skills + 4 shared agents, add `project.yml` + `.claude/settings.json` pinning
+`claude-workbench@v0.3.0`, keep `mutation-triage`/`live-verify` local, and land Task 6's drift
+guard. Watch the schema-boundary test the plan calls out: adoption should need `review.ci_gate`
+populated and little else — if it needs several new keys, the boundary is wrong. **SW itself is
+bounty-infra's sprint — run `/archive-sprint` for it *here* once #50 merges**, not in
+loop-orchestrator. See the SW sprint plan's § *Follow-on*.
 
 ---
 
