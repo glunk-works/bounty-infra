@@ -20,6 +20,14 @@ name: "1b. Build & Push Image"
 # task definition this workflow used to mutate directly is retired-in-place
 # pending PR2; run-scan.yml (SE) reads an explicit `image_tag` input instead
 # of any auto-updated "current" pointer.
+#
+# OPERATOR GATE, one-time: GHCR publishes a package PRIVATE on its first
+# push, and no `docker/build-push-action` input can change that -- it's a
+# package-settings action on github.com (org Packages -> bounty-scanner ->
+# Package settings -> Change visibility -> Public), not something CI can do
+# for itself. Until that flip happens, the credential-less `docker run` on
+# the scan VM (run-scan.yml) cannot pull the image. Do it once, after the
+# first push this workflow makes.
 
 on:
   push:

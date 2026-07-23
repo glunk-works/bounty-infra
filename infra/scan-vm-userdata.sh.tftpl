@@ -17,7 +17,18 @@ apt-get update -y
 apt-get install -y --no-install-recommends docker.io awscli
 
 EXIT_CODE=0
+# `docker run` does not inherit the host shell's environment -- the retired
+# ECS task role delivered credentials to boto3 via the task-definition
+# `environment` block + the ECS credential endpoint; here that same handoff
+# has to be explicit `-e` flags, or scanner.py's boto3 client has nothing
+# and its own RoE-load fatal check (no $S3_BUCKET_NAME) kills the scan
+# before it starts.
 docker run --rm \
+  -e AWS_ACCESS_KEY_ID \
+  -e AWS_SECRET_ACCESS_KEY \
+  -e AWS_SESSION_TOKEN \
+  -e AWS_DEFAULT_REGION \
+  -e S3_BUCKET_NAME="${s3_bucket_name}" \
   "${image_ref}" \
   "${target_domain}" \
   --program "${program}" \

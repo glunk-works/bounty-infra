@@ -122,9 +122,10 @@ jobs:
             exit 1
           fi
 
-      - name: Validate image_tag, timeout, max_findings
+      - name: Validate image_tag, severities, timeout, max_findings
         env:
           IMAGE_TAG: ${{ inputs.image_tag }}
+          SEVERITIES: ${{ inputs.severities }}
           SCAN_TIMEOUT: ${{ inputs.timeout }}
           MAX_FINDINGS: ${{ inputs.max_findings }}
         run: |
@@ -133,8 +134,23 @@ jobs:
             echo "::error::image_tag '$IMAGE_TAG' must be a git commit sha (7-40 hex chars)"
             exit 1
           fi
+          # Structural gate only, matching the other inputs above -- this one
+          # reaches the scan VM's shell via infra/scan-vm-userdata.sh.tftpl's
+          # `--severities "${severities}"`, rendered by envsubst with no
+          # re-quoting, so it needs the same treatment as target_domain/program.
+          if ! [[ "$SEVERITIES" =~ ^[a-z]+(,[a-z]+)*$ ]]; then
+            echo "::error::severities '$SEVERITIES' must be comma-separated lowercase words"
+            exit 1
+          fi
           if ! [[ "$SCAN_TIMEOUT" =~ ^[0-9]+$ ]]; then
             echo "::error::timeout '$SCAN_TIMEOUT' must be a positive integer"
+            exit 1
+          fi
+          # role-chaining hard-caps the scoped session at 3600s (see the next
+          # step); timeout+300 must stay under that or the session can expire
+          # before the poll deadline it's supposed to outlive.
+          if [ "$SCAN_TIMEOUT" -gt 3300 ]; then
+            echo "::error::timeout '$SCAN_TIMEOUT' exceeds 3300 -- the scoped AWS session (role-chaining, capped at 3600s) would expire before the poll deadline (timeout+300)"
             exit 1
           fi
           if ! [[ "$MAX_FINDINGS" =~ ^[0-9]+$ ]]; then
@@ -258,6 +274,13 @@ jobs:
           # verified against GET https://api.vultr.com/v2/os). Region/plan
           # come from Tofu state (infra/outputs.tf) -- one source of truth,
           # not a literal duplicated here.
+          # reserved_ipv4 takes the reserved IP's `id` (not its address/subnet)
+          # -- matches the vultr/vultr Terraform provider's own instance
+          # resource, which populates this same POST /v2/instances field from
+          # `reserved_ip_id` (resource_vultr_instance.go). Not exercised by
+          # the Phase-1 proof (use_reserved_ip=false is the default path);
+          # confirm against a live create call before the first
+          # use_reserved_ip=true dispatch.
           BODY=$(jq -n \
             --arg region "$VULTR_REGION" \
             --arg plan "$VULTR_PLAN" \
@@ -324,8 +347,23 @@ jobs:
           USE_RESERVED_IP: ${{ inputs.use_reserved_ip }}
         run: |
           set -euo pipefail
+          CURL='curl -sf --retry 3 --retry-delay 2'
+
+          # INSTANCE_ID is only set once the create step's response is fully
+          # parsed -- if the job is cancelled between the Vultr API call
+          # returning and that write landing in $GITHUB_ENV, this step would
+          # otherwise see nothing and leave a billed VM running. Fall back to
+          # looking it up by the label the create step set (bounty-scanner-
+          # <RUN_ID>, unique per dispatch) before concluding there is none.
           if [ -z "${INSTANCE_ID:-}" ]; then
-            echo "No instance was created -- nothing to destroy."
+            if [ -n "${RUN_ID:-}" ]; then
+              INSTANCE_ID=$($CURL "https://api.vultr.com/v2/instances?label=bounty-scanner-${RUN_ID}" \
+                -H "Authorization: Bearer ${VULTR_API_KEY}" | jq -r '.instances[0].id // empty')
+            fi
+          fi
+
+          if [ -z "${INSTANCE_ID:-}" ]; then
+            echo "No instance was created (or found by label) -- nothing to destroy."
             exit 0
           fi
 
@@ -333,11 +371,11 @@ jobs:
           # address (SE-MG5); it returns to the pool for the next
           # registration-required scan.
           if [ "$USE_RESERVED_IP" = "true" ] && [ -n "${RESERVED_IP_ID:-}" ]; then
-            curl -sf -X POST "https://api.vultr.com/v2/reserved-ips/${RESERVED_IP_ID}/detach" \
+            $CURL -X POST "https://api.vultr.com/v2/reserved-ips/${RESERVED_IP_ID}/detach" \
               -H "Authorization: Bearer ${VULTR_API_KEY}" || echo "::warning::Reserved IP detach failed for ${RESERVED_IP_ID} -- may already be detached."
           fi
 
-          curl -sf -X DELETE "https://api.vultr.com/v2/instances/${INSTANCE_ID}" \
+          $CURL -X DELETE "https://api.vultr.com/v2/instances/${INSTANCE_ID}" \
             -H "Authorization: Bearer ${VULTR_API_KEY}"
           echo "Instance ${INSTANCE_ID} destroyed."
 
