@@ -76,9 +76,18 @@ jobs:
           role-to-assume: ${{ env.AWS_PLAN_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
+      # tofu_wrapper: false -- the default wrapper normalizes -detailed-exitcode's
+      # 0 (no changes) AND 2 (changes present) to the same process exit 0 (see
+      # opentofu/setup-opentofu's wrapper/tofu.js: `if (exitCode === 0 ||
+      # exitCode === 2) { return; }`), so a script reading raw `$?` -- as the
+      # next step does -- can never tell the two apart. The action's own docs
+      # flag this exact symptom. This predates SE; it just never manifested
+      # before because no prior PR introduced a real infra/ diff to detect.
       - name: Setup OpenTofu Core
         if: steps.changes.outputs.infra == 'true'
         uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_wrapper: false
 
       - name: OpenTofu plan
         if: steps.changes.outputs.infra == 'true'
@@ -120,33 +129,6 @@ jobs:
             cat plan.stderr
             exit 1
           fi
-
-      # TEMPORARY DIAGNOSTIC -- to be removed before merge. `tofu state list`
-      # prints resource ADDRESSES only (the same disclosure class BI-D4 already
-      # allows for the plan summary below) -- investigating an unexpected
-      # exit-code-0 plan for a brand-new resource.
-      - name: DIAGNOSTIC state list
-        if: steps.changes.outputs.infra == 'true'
-        working-directory: ./infra
-        run: |
-          set -euo pipefail
-          echo "--- tofu state list ---"
-          tofu state list
-          echo "--- end state list ---"
-
-      # TEMPORARY DIAGNOSTIC -- to be removed before merge. Grep-filtered to
-      # only lines mentioning "vultr" or the final "Plan:"/"No changes" summary
-      # line -- neither ever contains a real resource ID/ARN (a resource that
-      # doesn't exist yet has none to print; the Plan: line is address+count
-      # only), so this stays inside BI-D4's existing disclosure allowance.
-      - name: DIAGNOSTIC plan.stdout vultr lines
-        if: steps.changes.outputs.infra == 'true'
-        working-directory: ./infra
-        run: |
-          set -euo pipefail
-          echo "--- filtered plan.stdout ---"
-          grep -iE "vultr|^Plan:|^No changes" plan.stdout || echo "(no matching lines)"
-          echo "--- end filtered plan.stdout ---"
 
       - name: Summarize plan (addresses + counts only)
         if: steps.changes.outputs.infra == 'true'
