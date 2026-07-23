@@ -58,6 +58,9 @@ src/sbom.json
 # Dev-workflow cursor: session-local scratch state.
 # .ai/next-steps.md IS committed — it is what travels between sessions.
 .ai/state.json
+# Archived sprint cursors: local history convenience; the durable record is
+# git history + docs/hardening_roadmap.md, so these are not committed.
+.ai/archive/
 
 # VS Code / OS
 .vscode/
