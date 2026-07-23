@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# SE (BI-D5) per-scan VM entrypoint. This is a committed template, not a Tofu
+# resource -- run-scan.yml renders it with `envsubst` at instance-create time
+# and injects the short-lived STS session there, so no credential is ever
+# baked into Tofu state (SE-MG2). The VM has no ingress firewall rule, so
+# nothing reaches it from outside; nothing this script prints leaves the
+# instance's own console log, which no workflow retrieves (BI-D4).
+
+export AWS_ACCESS_KEY_ID="${aws_access_key_id}"
+export AWS_SECRET_ACCESS_KEY="${aws_secret_access_key}"
+export AWS_SESSION_TOKEN="${aws_session_token}"
+export AWS_DEFAULT_REGION="${aws_region}"
+
+apt-get update -y
+apt-get install -y --no-install-recommends docker.io awscli
+
+EXIT_CODE=0
+docker run --rm \
+  "${image_ref}" \
+  "${target_domain}" \
+  --program "${program}" \
+  --contact-url "${contact_url}" \
+  --severities "${severities}" \
+  --timeout "${scan_timeout}" \
+  --max-findings "${max_findings}" \
+  || EXIT_CODE=$?
+
+# The one genuinely new mechanism (sprint_plan.md): ECS gave the launcher
+# `ecs wait tasks-stopped` + exitCode; a VM has none, so this sentinel is the
+# completion signal the launcher polls for. Written with the same scoped
+# session -- never a broader credential -- and it carries only an exit code,
+# never a finding.
+printf '{"exit_code": %s}' "$EXIT_CODE" > /tmp/status.json
+aws s3 cp /tmp/status.json "s3://${s3_bucket_name}/runs/${run_id}/status.json"
+
+# Best-effort only -- run-scan.yml's own instance-delete step is the
+# authoritative teardown on every exit path (success, failure, or timeout);
+# this is a second layer in case that step is ever delayed.
+poweroff || true

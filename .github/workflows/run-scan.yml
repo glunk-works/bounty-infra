@@ -1,5 +1,13 @@
 name: "2. Execute Vulnerability Scan"
 
+# SE (BI-D5): the launcher no longer talks to ECS. It reads the two
+# persistent Vultr resources from Tofu state (SE-MG1: infra/main.tf owns
+# only the firewall group + the toggle-gated reserved IP), assumes a
+# session-policy-scoped AWS role for this one scan (SE-MG2), then creates,
+# polls, and always destroys a per-scan Vultr VM itself -- the direct heir
+# of the retired `aws ecs run-task` call. See sprints/SE_egress_migration/
+# sprint_plan.md for the full decision record (SE-MG1..MG5).
+
 on:
   workflow_dispatch:
     inputs:
@@ -9,6 +17,10 @@ on:
         type: string
       program:
         description: 'RoE program handle to validate this scan against (S1 #7 -- never search all programs; a typo must not silently borrow another program''s authorization)'
+        required: true
+        type: string
+      image_tag:
+        description: 'ghcr.io/glunk-works/bounty-scanner tag to run (a build-image.yml commit sha) -- explicit, not auto-resolved, so a dispatch always runs a known, reviewed build'
         required: true
         type: string
       severities:
@@ -26,10 +38,15 @@ on:
         required: false
         default: '50'
         type: string
+      use_reserved_ip:
+        description: 'Attach the persistent reserved IP (SE-MG5) -- only for a program that mandates source-IP registration. Requires reserved_ip_enabled=true in infra/ first; every other scan runs fully ephemeral.'
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   execute-scan:
-    name: "Run Fargate Scan"
+    name: "Run Vultr Scan"
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -60,7 +77,7 @@ jobs:
           role-to-assume: ${{ env.AWS_OIDC_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Fetch Infrastructure Networking States
+      - name: Fetch Vultr resource state
         id: infra-outputs
         working-directory: ./infra
         run: |
@@ -70,9 +87,12 @@ jobs:
             -backend-config="region=${AWS_REGION}" \
             -backend-config="dynamodb_table=${TF_STATE_LOCK_TABLE}"
 
-          echo "CLUSTER_NAME=$(tofu output -raw ecs_cluster_name)" >> "$GITHUB_ENV"
-          echo "SUBNET_ID=$(tofu output -raw subnet_id)" >> "$GITHUB_ENV"
-          echo "SG_ID=$(tofu output -raw security_group_id)" >> "$GITHUB_ENV"
+          # `tofu output` only reads the state file -- no provider plugin is
+          # invoked, so this needs no vultr_api_key.
+          echo "FIREWALL_GROUP_ID=$(tofu output -raw vultr_firewall_group_id)" >> "$GITHUB_ENV"
+          echo "RESERVED_IP_ID=$(tofu output -json reserved_ip_id | jq -r '. // empty')" >> "$GITHUB_ENV"
+          echo "VULTR_REGION=$(tofu output -raw vultr_region)" >> "$GITHUB_ENV"
+          echo "VULTR_PLAN=$(tofu output -raw vultr_plan)" >> "$GITHUB_ENV"
 
       - name: Validate target_domain
         env:
@@ -102,80 +122,230 @@ jobs:
             exit 1
           fi
 
-      - name: Trigger Scan Task & Wait for Completion
+      - name: Validate image_tag, timeout, max_findings
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+          SCAN_TIMEOUT: ${{ inputs.timeout }}
+          MAX_FINDINGS: ${{ inputs.max_findings }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$IMAGE_TAG" =~ ^[0-9a-fA-F]{7,40}$ ]]; then
+            echo "::error::image_tag '$IMAGE_TAG' must be a git commit sha (7-40 hex chars)"
+            exit 1
+          fi
+          if ! [[ "$SCAN_TIMEOUT" =~ ^[0-9]+$ ]]; then
+            echo "::error::timeout '$SCAN_TIMEOUT' must be a positive integer"
+            exit 1
+          fi
+          if ! [[ "$MAX_FINDINGS" =~ ^[0-9]+$ ]]; then
+            echo "::error::max_findings '$MAX_FINDINGS' must be a positive integer"
+            exit 1
+          fi
+
+      - name: Guard use_reserved_ip against an unprovisioned reserved IP
+        env:
+          USE_RESERVED_IP: ${{ inputs.use_reserved_ip }}
+        run: |
+          set -euo pipefail
+          # Never silently fall back to a rotating IP for a program that
+          # required a registered one (sprint_plan.md Task 4).
+          if [ "$USE_RESERVED_IP" = "true" ] && [ -z "${RESERVED_IP_ID:-}" ]; then
+            echo "::error::use_reserved_ip=true but infra/ has no reserved IP provisioned (reserved_ip_enabled=false). Apply with reserved_ip_enabled=true first, or dispatch with use_reserved_ip=false."
+            exit 1
+          fi
+
+      - name: Generate RUN_ID and scoped session policy
         env:
           TARGET_DOMAIN: ${{ inputs.target_domain }}
           PROGRAM: ${{ inputs.program }}
-          SEVERITIES: ${{ inputs.severities }}
           SCAN_TIMEOUT: ${{ inputs.timeout }}
-          MAX_FINDINGS: ${{ inputs.max_findings }}
-          # Locked shape (BI-D9/#32, .ai/next-steps.md): platform-neutral,
-          # `+URL` bot convention. Not a secret -- already public in this
-          # repo's own docs -- so it is a literal here, not Infisical-sourced.
-          CONTACT_URL: "https://hackerone.com/seuss"
+          GH_RUN_ID: ${{ github.run_id }}
+          GH_RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           set -euo pipefail
-          echo "Triggering scan for $TARGET_DOMAIN (program: $PROGRAM)..."
+          RUN_ID="${GH_RUN_ID}-${GH_RUN_ATTEMPT}"
+          echo "RUN_ID=${RUN_ID}" >> "$GITHUB_ENV"
 
-          # No --scope-uri here: the scanner derives roe/<program>/scope.json
-          # from $S3_BUCKET_NAME, which is already baked into the task
-          # definition's own environment (infra/main.tf) -- not something
-          # this workflow needs to know or pass down (BI-D9 revision, S1).
-          OVERRIDES=$(jq -n \
+          # role-chaining caps session duration at 1h (sprint_plan.md Task 1) --
+          # scan timeout plus a boot/pull margin, floored at STS's own 900s
+          # minimum, capped at the 3600s chain ceiling.
+          DURATION=$(( SCAN_TIMEOUT + 300 ))
+          [ "$DURATION" -gt 3600 ] && DURATION=3600
+          [ "$DURATION" -lt 900 ] && DURATION=900
+          echo "SCOPED_SESSION_DURATION=${DURATION}" >> "$GITHUB_ENV"
+
+          # Scoped to $TARGET_DOMAIN/*, not a program-name prefix: scanner.py's
+          # upload_to_s3 (src/bounty_scanner/scanner.py) keys findings by
+          # domain/timestamp, not by program, and BI-D5 says that path is
+          # unchanged by SE -- so the domain prefix is the tightest scope that
+          # actually matches what the container writes.
+          SESSION_POLICY=$(jq -n -c \
+            --arg findings_bucket "$FINDINGS_BUCKET_NAME" \
             --arg domain "$TARGET_DOMAIN" \
             --arg program "$PROGRAM" \
-            --arg severities "$SEVERITIES" \
-            --arg timeout "$SCAN_TIMEOUT" \
-            --arg max_findings "$MAX_FINDINGS" \
-            --arg contact_url "$CONTACT_URL" \
+            --arg run_id "$RUN_ID" \
+            --arg kms_key_arn "$KMS_KEY_ARN" \
             '{
-              containerOverrides: [
+              Version: "2012-10-17",
+              Statement: [
                 {
-                  name: "scanner-container",
-                  # No "python -m bounty_scanner.scanner" prefix here: ECS
-                  # containerOverrides.command replaces Docker CMD only, and
-                  # the image ENTRYPOINT (src/Dockerfile) already supplies
-                  # that prefix. Repeating it here duplicates the module
-                  # invocation in the final argv, which argparse rejects.
-                  command: [
-                    $domain,
-                    "--program", $program,
-                    "--contact-url", $contact_url,
-                    "--severities", $severities,
-                    "--timeout", $timeout,
-                    "--max-findings", $max_findings
-                  ]
+                  Sid: "ReadRoEScope",
+                  Effect: "Allow",
+                  Action: "s3:GetObject",
+                  Resource: ("arn:aws:s3:::" + $findings_bucket + "/roe/" + $program + "/scope.json")
+                },
+                {
+                  Sid: "WriteFindingsForThisDomain",
+                  Effect: "Allow",
+                  Action: "s3:PutObject",
+                  Resource: ("arn:aws:s3:::" + $findings_bucket + "/" + $domain + "/*")
+                },
+                {
+                  Sid: "StatusSentinelForThisRun",
+                  Effect: "Allow",
+                  Action: ["s3:PutObject", "s3:GetObject"],
+                  Resource: ("arn:aws:s3:::" + $findings_bucket + "/runs/" + $run_id + "/*")
+                },
+                {
+                  Sid: "KMSForFindings",
+                  Effect: "Allow",
+                  Action: ["kms:GenerateDataKey*", "kms:Decrypt"],
+                  Resource: $kms_key_arn
                 }
               ]
             }')
+          echo "SESSION_POLICY=${SESSION_POLICY}" >> "$GITHUB_ENV"
 
-          TASK_ARN=$(aws ecs run-task \
-            --cluster "$CLUSTER_NAME" \
-            --task-definition bounty-scanner-task \
-            --launch-type FARGATE \
-            --network-configuration "awsvpcConfiguration={subnets=[$SUBNET_ID],securityGroups=[$SG_ID],assignPublicIp=ENABLED}" \
-            --overrides "$OVERRIDES" \
-            --query 'tasks[0].taskArn' \
-            --output text)
+      - name: Assume scoped scanner-writer session (SE-MG2)
+        uses: aws-actions/configure-aws-credentials@517a711dbcd0e402f90c77e7e2f81e849156e31d # v6.2.2
+        with:
+          role-to-assume: ${{ env.AWS_SCANNER_WRITER_ROLE_ARN }}
+          role-chaining: true
+          role-duration-seconds: ${{ env.SCOPED_SESSION_DURATION }}
+          inline-session-policy: ${{ env.SESSION_POLICY }}
+          aws-region: ${{ env.AWS_REGION }}
 
-          echo "Task launched: $TASK_ARN"
-          echo "Waiting for task to complete (this may take a few minutes)..."
+      - name: Render cloud-init user-data
+        env:
+          aws_access_key_id: ${{ env.AWS_ACCESS_KEY_ID }}
+          aws_secret_access_key: ${{ env.AWS_SECRET_ACCESS_KEY }}
+          aws_session_token: ${{ env.AWS_SESSION_TOKEN }}
+          aws_region: ${{ env.AWS_REGION }}
+          s3_bucket_name: ${{ env.FINDINGS_BUCKET_NAME }}
+          run_id: ${{ env.RUN_ID }}
+          image_ref: ghcr.io/glunk-works/bounty-scanner:${{ inputs.image_tag }}
+          target_domain: ${{ inputs.target_domain }}
+          program: ${{ inputs.program }}
+          contact_url: "https://hackerone.com/seuss"
+          severities: ${{ inputs.severities }}
+          scan_timeout: ${{ inputs.timeout }}
+          max_findings: ${{ inputs.max_findings }}
+        run: |
+          set -euo pipefail
+          # Explicit substitution list only -- the script's own shell
+          # variables ($EXIT_CODE etc.) must survive rendering untouched.
+          vars='$aws_access_key_id $aws_secret_access_key $aws_session_token $aws_region $s3_bucket_name $run_id $image_ref $target_domain $program $contact_url $severities $scan_timeout $max_findings'
+          envsubst "$vars" < infra/scan-vm-userdata.sh.tftpl > /tmp/user-data.sh
+          base64 -w0 /tmp/user-data.sh > /tmp/user-data.b64
+          rm -f /tmp/user-data.sh
 
-          aws ecs wait tasks-stopped \
-            --cluster "$CLUSTER_NAME" \
-            --tasks "$TASK_ARN"
+      - name: Create Vultr scan VM
+        env:
+          USE_RESERVED_IP: ${{ inputs.use_reserved_ip }}
+        run: |
+          set -euo pipefail
+          # Ubuntu 24.04 LTS x64 (Vultr os_id 1743 = 22.04, 2284 = 24.04 --
+          # verified against GET https://api.vultr.com/v2/os). Region/plan
+          # come from Tofu state (infra/outputs.tf) -- one source of truth,
+          # not a literal duplicated here.
+          BODY=$(jq -n \
+            --arg region "$VULTR_REGION" \
+            --arg plan "$VULTR_PLAN" \
+            --arg label "bounty-scanner-${RUN_ID}" \
+            --arg firewall_group_id "$FIREWALL_GROUP_ID" \
+            --arg user_data "$(cat /tmp/user-data.b64)" \
+            --arg reserved_ipv4 "$([ "$USE_RESERVED_IP" = "true" ] && echo "$RESERVED_IP_ID" || echo "")" \
+            '{
+              region: $region,
+              plan: $plan,
+              os_id: 2284,
+              label: $label,
+              tags: ["bounty-scanner"],
+              firewall_group_id: $firewall_group_id,
+              user_data: $user_data,
+              backups: "disabled",
+              activation_email: false
+            } + (if $reserved_ipv4 != "" then {reserved_ipv4: $reserved_ipv4} else {} end)')
+          rm -f /tmp/user-data.b64
 
-          EXIT_CODE=$(aws ecs describe-tasks \
-            --cluster "$CLUSTER_NAME" \
-            --tasks "$TASK_ARN" \
-            --query 'tasks[0].containers[0].exitCode' \
-            --output text)
+          RESPONSE=$(curl -sf -X POST "https://api.vultr.com/v2/instances" \
+            -H "Authorization: Bearer ${VULTR_API_KEY}" \
+            -H "Content-Type: application/json" \
+            -d "$BODY")
 
-          echo "Task exited with code: $EXIT_CODE"
-
-          if [ "$EXIT_CODE" != "0" ]; then
-            echo "::error::Scanner infrastructure task failed to execute! Check CloudWatch Logs for crash details."
+          INSTANCE_ID=$(echo "$RESPONSE" | jq -r '.instance.id')
+          if [ -z "$INSTANCE_ID" ] || [ "$INSTANCE_ID" = "null" ]; then
+            echo "::error::Vultr instance-create did not return an instance id"
             exit 1
-          else
-            echo "Scanner task executed successfully! (Security findings, if any, have been exported to S3)."
           fi
+          echo "INSTANCE_ID=${INSTANCE_ID}" >> "$GITHUB_ENV"
+          echo "Vultr instance ${INSTANCE_ID} launching (run ${RUN_ID})..."
+
+      - name: Poll S3 status sentinel
+        env:
+          SCAN_TIMEOUT: ${{ inputs.timeout }}
+        run: |
+          set -euo pipefail
+          DEADLINE=$(( $(date +%s) + SCAN_TIMEOUT + 300 ))
+          KEY="runs/${RUN_ID}/status.json"
+          FOUND=false
+          while [ "$(date +%s)" -lt "$DEADLINE" ]; do
+            if aws s3api head-object --bucket "$FINDINGS_BUCKET_NAME" --key "$KEY" >/dev/null 2>&1; then
+              FOUND=true
+              break
+            fi
+            sleep 15
+          done
+
+          if [ "$FOUND" != "true" ]; then
+            echo "::error::No status sentinel at s3://${FINDINGS_BUCKET_NAME}/${KEY} before the deadline -- treating as failed."
+            echo "SCAN_EXIT_CODE=timeout" >> "$GITHUB_ENV"
+          else
+            aws s3api get-object --bucket "$FINDINGS_BUCKET_NAME" --key "$KEY" /tmp/status.json >/dev/null
+            EXIT_CODE=$(jq -r '.exit_code' /tmp/status.json)
+            rm -f /tmp/status.json
+            echo "SCAN_EXIT_CODE=${EXIT_CODE}" >> "$GITHUB_ENV"
+            echo "Scan exited with code: ${EXIT_CODE}"
+          fi
+
+      - name: Destroy Vultr scan VM
+        if: always()
+        env:
+          USE_RESERVED_IP: ${{ inputs.use_reserved_ip }}
+        run: |
+          set -euo pipefail
+          if [ -z "${INSTANCE_ID:-}" ]; then
+            echo "No instance was created -- nothing to destroy."
+            exit 0
+          fi
+
+          # Detach only -- deleting a reserved IP loses the registered
+          # address (SE-MG5); it returns to the pool for the next
+          # registration-required scan.
+          if [ "$USE_RESERVED_IP" = "true" ] && [ -n "${RESERVED_IP_ID:-}" ]; then
+            curl -sf -X POST "https://api.vultr.com/v2/reserved-ips/${RESERVED_IP_ID}/detach" \
+              -H "Authorization: Bearer ${VULTR_API_KEY}" || echo "::warning::Reserved IP detach failed for ${RESERVED_IP_ID} -- may already be detached."
+          fi
+
+          curl -sf -X DELETE "https://api.vultr.com/v2/instances/${INSTANCE_ID}" \
+            -H "Authorization: Bearer ${VULTR_API_KEY}"
+          echo "Instance ${INSTANCE_ID} destroyed."
+
+      - name: Fail on non-zero scan exit
+        run: |
+          set -euo pipefail
+          if [ "${SCAN_EXIT_CODE:-timeout}" != "0" ]; then
+            echo "::error::Scan did not complete successfully (exit: ${SCAN_EXIT_CODE:-timeout})."
+            exit 1
+          fi
+          echo "Scanner executed successfully! (Security findings, if any, have been exported to S3)."
