@@ -6,57 +6,60 @@ Regenerate this at the end of every working session.
 
 ## Now
 
-**Devcontainer (`DC`) — built, PR open, `awaiting_review`.** An owner-prioritised tooling
-task, inserted ahead of SE. [PR #54](https://github.com/glunk-works/bounty-infra/pull/54)
-needs the owner's review + merge.
+**Egress migration (`SE`, BI-D5) — `implementing`.** Plan written and **owner-approved** this
+session ([sprints/SE_egress_migration/sprint_plan.md](../sprints/SE_egress_migration/sprint_plan.md)),
+five decisions locked. Next up is **PR1** — the additive Vultr stand-up + end-to-end proof.
+**Sonnet/Coder.**
 
 ## Just done
 
-- **DC build session (Sonnet/Coder), commit `c3ee243`.** Delivered `.devcontainer/Dockerfile` +
-  `devcontainer.json` (+ CLI-generated `devcontainer-lock.json`, `.devcontainer/README.md`,
-  root `.gitattributes`) per the approved plan
-  ([sprints/DC_devcontainer/sprint_plan.md](../sprints/DC_devcontainer/sprint_plan.md)).
-  Every non-hatch-provisioned tool (OpenTofu 1.12.5, tflint v0.64.0, gitleaks 8.30.1,
-  zizmor 1.28.0, yq 4.53.3, hatch 1.17.1) is version+SHA256-pinned in the Dockerfile.
-- **Verified end-to-end, not just built.** Ran `devcontainer build` (Dockerfile + the
-  `python:1`/`github-cli:1` features) and executed every plan Task 3 acceptance command
-  inside the resulting image against this repo's real `src/` and `infra/` — all green, both
-  in-container and on the host. `.gitattributes` included after confirming
-  `git add --renormalize .` produces zero churn.
-- **`/critic-gate` ran `security-critic` + `docs-consistency`.** No blocking findings; fixed
-  what they raised — three Dockerfile comments overstated CI parity for gitleaks/zizmor/
-  OpenTofu (CI pins only those tools' *actions*, not the binaries; only tflint's claim was
-  actually backed), `hatch` was unpinned, a staging-consistency nit on `yq`, the zizmor
-  no-upstream-checksum-manifest caveat needed to live at its `RUN` block not just the file
-  header, and the `bookworm` vs. plan's `debian-bookworm` base-image-tag divergence needed
-  recording (the latter isn't a valid published tag).
-- **PR opened:** [#54](https://github.com/glunk-works/bounty-infra/pull/54), `docs/dc-plan` →
-  `main`. Not merged.
+- **SE planned & approved.** Five micro-gates locked: **MG1** hybrid — tofu owns persistent
+  Vultr, `run-scan.yml` owns the ephemeral per-scan VM; **MG2** scoped short-lived STS creds via
+  cloud-init user-data (this is the re-scoped #11); **MG3** GHCR public image, build path goes
+  AWS-free; **MG4** two-phase: stand-up + prove (PR1), then retire (PR2); **MG5** on-demand,
+  registration-aware reserved IP — **zero standing cost by default**, per the cost-ephemerality
+  principle.
+- **DC archived earlier this session** (PRs #54/#55 merged); `main` at `056fc6d`. Cursor advanced
+  DC → SE.
 
 ## Next
 
-- **Check PR #54's merge status.** If still open, report and wait — do not merge it.
-- **Once merged:** run `/archive-sprint` to close DC, then open the SE planning cursor —
-  write `sprints/SE_egress_migration/sprint_plan.md` per `docs/hardening_roadmap.md`'s BI-D5
-  (scan egress leaves AWS for per-scan ephemeral Vultr VMs; AWS keeps the control plane).
-  Architect/Opus.
-- **HITL Gate: OPEN.** PR #54 needs the owner's review + merge. Nothing downstream (SE
-  planning) should start until it closes.
+- **Implement PR1 (Phase 1, additive)** per the plan's task breakdown — the **bounty-infra-local**
+  changes:
+  - **Task 2** — `infra/`: add the Vultr provider + free firewall group + startup/cloud-init
+    template; reserved IP **`count`-gated behind `reserved_ip_enabled` (default false)**; new
+    vars/outputs. `tofu fmt`/`validate`/`tflint` green.
+  - **Task 3** — `build-image.yml` → GHCR `:<sha>` via `GITHUB_TOKEN`; drop all ECR/AWS/ECS steps.
+  - **Task 4** — `run-scan.yml` → Vultr launch-poll-destroy; scoped `sts:AssumeRole`; STS triple
+    in user-data; S3 **status sentinel** for the completion signal; `use_reserved_ip` input
+    (default false).
+  - Run the green gate. **STOP before Task 5 (the live proof)** — it needs the operator **and**
+    the cross-repo prerequisite below.
+- **Cross-repo prerequisite (Task 1, `global-bootstrap` — separate repo, lands first):** the
+  `bounty-scanner-s3-writer` role (S3 PutObject to findings + `runs/*/status.json`, GetObject on
+  the RoE object, KMS DataKey), trust admitting `run-scan.yml`'s subject. `run-scan.yml` can't
+  authenticate until it exists. Operator-sequenced.
+- **HITL Gate: NONE OPEN** (plan approved, PR1 implementation authorized). Next gates in order:
+  PR1 review+merge → the live proof → PR2 teardown.
 
-## Queued behind the devcontainer
+## Queued behind PR1
 
-- **SE — Egress migration (BI-D5)** — the next *roadmap* sprint (retire ECS/VPC/ECR; per-scan
-  Vultr VM; re-point `run-scan.yml`). SE before S2. Plan unwritten.
-- **loop-orchestrator adoption (Phase 4)** — the plugin's second adoption, planned *in that
-  repo*.
+- **PR2 (teardown)** — delete the AWS Fargate/VPC/ECR/IAM estate as a destroys-only, summarized
+  plan (BI-D2); docs pass; mark SE done; close #11. Only after the Phase-1 proof.
+- **S2 — Scanner robustness** — follows SE (#11 is closed here; #14 only partly advanced via the
+  status sentinel).
+- **loop-orchestrator Phase 4** — planned in that repo.
 
-## Still-open operator gates (not sprints; a coder cannot do these)
+## Still-open operator gates (a coder cannot do these)
 
-- **S1: RoE documents don't exist yet.** Fail-closed scanner refuses until
-  `s3://<findings-bucket>/roe/<program>/scope.json` exists per engagement (BI-D8/D9).
-- **S1: UA contact URL** — confirm `https://hackerone.com/seuss` resolves (a 404 is worse than none).
+- **S1 RoE `scope.json` doesn't exist**; **UA contact-URL** check (`https://hackerone.com/seuss`).
+  Both gate any *real-program* scan — SE's Phase-1 proof deliberately uses an **operator-owned**
+  target to avoid this.
+- **Reserved IP** — provision only when onboarding a program that mandates source-IP registration
+  (MG5): flip `reserved_ip_enabled`, apply, register, dispatch with `use_reserved_ip=true`.
 
 ## Pointers
 
-- `docs/hardening_roadmap.md` — reference of record + threat model (sprint sequence; BI-D1..D13).
-- `sprints/DC_devcontainer/sprint_plan.md` — the approved DC plan (task breakdown + acceptance test).
+- `docs/hardening_roadmap.md` — reference of record + threat model; read **BI-D5**.
+- `sprints/SE_egress_migration/sprint_plan.md` — the approved plan (MG1–MG5, two-phase task
+  breakdown, DoD, operator gates).
