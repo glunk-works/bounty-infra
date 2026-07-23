@@ -6,41 +6,49 @@ Regenerate this at the end of every working session.
 
 ## Now
 
-**Devcontainer (`DC`) — plan APPROVED, now `implementing`.** An owner-prioritised tooling task,
-inserted ahead of SE. Assigned to **Sonnet / Coder** to build `.devcontainer/` per the approved
-plan — greenfield, no config exists yet. Not a roadmap sprint.
+**Devcontainer (`DC`) — built, PR open, `awaiting_review`.** An owner-prioritised tooling
+task, inserted ahead of SE. [PR #54](https://github.com/glunk-works/bounty-infra/pull/54)
+needs the owner's review + merge.
 
 ## Just done
 
-- **DC planning pass — COMPLETE (Opus/Architect), plan approved by owner (2026-07-22).**
-  Wrote [sprints/DC_devcontainer/sprint_plan.md](../sprints/DC_devcontainer/sprint_plan.md).
-  Two owner decisions locked:
-  1. **Scanner runtime EXCLUDED** — `src/Dockerfile` stays the sole runtime definition; BI-D5
-     migrates that runtime to Vultr anyway; unit tests use `tmp_path` and never shell to real tools.
-  2. **Hybrid, pinned composition** — official `python`(3.11) + `github-cli` features (`:1`); a
-     `Dockerfile` layer installs OpenTofu / tflint `v0.64.0` / gitleaks / zizmor / `yq` **pinned +
-     SHA256-verified**; `jq` from apt; hatch baked in; Python **3.14 via `hatch python install`**.
-- **Grounding pass caught two errors in the original scope note:** `tflint v0.64.0` is part of the
-  `tofu-validate` required check (was missing from the note) and is now in-scope pinned to match CI;
-  and the Python audit/sbom/lint tools are **hatch-provisioned**, so they need no OS install (keeps
-  the Dockerfile layer small).
+- **DC build session (Sonnet/Coder), commit `c3ee243`.** Delivered `.devcontainer/Dockerfile` +
+  `devcontainer.json` (+ CLI-generated `devcontainer-lock.json`, `.devcontainer/README.md`,
+  root `.gitattributes`) per the approved plan
+  ([sprints/DC_devcontainer/sprint_plan.md](../sprints/DC_devcontainer/sprint_plan.md)).
+  Every non-hatch-provisioned tool (OpenTofu 1.12.5, tflint v0.64.0, gitleaks 8.30.1,
+  zizmor 1.28.0, yq 4.53.3, hatch 1.17.1) is version+SHA256-pinned in the Dockerfile.
+- **Verified end-to-end, not just built.** Ran `devcontainer build` (Dockerfile + the
+  `python:1`/`github-cli:1` features) and executed every plan Task 3 acceptance command
+  inside the resulting image against this repo's real `src/` and `infra/` — all green, both
+  in-container and on the host. `.gitattributes` included after confirming
+  `git add --renormalize .` produces zero churn.
+- **`/critic-gate` ran `security-critic` + `docs-consistency`.** No blocking findings; fixed
+  what they raised — three Dockerfile comments overstated CI parity for gitleaks/zizmor/
+  OpenTofu (CI pins only those tools' *actions*, not the binaries; only tflint's claim was
+  actually backed), `hatch` was unpinned, a staging-consistency nit on `yq`, the zizmor
+  no-upstream-checksum-manifest caveat needed to live at its `RUN` block not just the file
+  header, and the `bookworm` vs. plan's `debian-bookworm` base-image-tag divergence needed
+  recording (the latter isn't a valid published tag).
+- **PR opened:** [#54](https://github.com/glunk-works/bounty-infra/pull/54), `docs/dc-plan` →
+  `main`. Not merged.
 
 ## Next
 
-- **Build `.devcontainer/` (Sonnet / Coder).** Deliver `devcontainer.json` + `Dockerfile` per the
-  plan's Task breakdown. **Acceptance test = the plan's Task 3 command set all green in a freshly
-  built container** (hatch lint/test/audit/sbom; tofu fmt+validate+tflint; gitleaks; zizmor; hatch
-  build on 3.14; gh/yq/jq resolve). Deferred judgment call (plan Task 4): root `.gitattributes`
-  (`* text=auto eol=lf`) only if `git add --renormalize` shows no churn — record either way.
-  Touch **only** `.devcontainer/**` (+ optional `.gitattributes`).
-- **HITL Gate:** NONE OPEN — plan approved, build may auto-start. Next gate is the **owner merging
-  the build PR** (the build session opens it and never self-merges).
+- **Check PR #54's merge status.** If still open, report and wait — do not merge it.
+- **Once merged:** run `/archive-sprint` to close DC, then open the SE planning cursor —
+  write `sprints/SE_egress_migration/sprint_plan.md` per `docs/hardening_roadmap.md`'s BI-D5
+  (scan egress leaves AWS for per-scan ephemeral Vultr VMs; AWS keeps the control plane).
+  Architect/Opus.
+- **HITL Gate: OPEN.** PR #54 needs the owner's review + merge. Nothing downstream (SE
+  planning) should start until it closes.
 
 ## Queued behind the devcontainer
 
-- **SE — Egress migration (BI-D5)** — the next *roadmap* sprint (retire ECS/VPC/ECR; per-scan Vultr
-  VM; re-point `run-scan.yml`). SE before S2. Plan unwritten.
-- **loop-orchestrator adoption (Phase 4)** — the plugin's second adoption, planned *in that repo*.
+- **SE — Egress migration (BI-D5)** — the next *roadmap* sprint (retire ECS/VPC/ECR; per-scan
+  Vultr VM; re-point `run-scan.yml`). SE before S2. Plan unwritten.
+- **loop-orchestrator adoption (Phase 4)** — the plugin's second adoption, planned *in that
+  repo*.
 
 ## Still-open operator gates (not sprints; a coder cannot do these)
 
