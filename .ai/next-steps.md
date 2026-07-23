@@ -6,50 +6,41 @@ Regenerate this at the end of every working session.
 
 ## Now
 
-**Egress migration (`SE`, BI-D5) — `blocked` on operator actions.** PR1 (Phase 1, additive)
-merged as [#57](https://github.com/glunk-works/bounty-infra/pull/57) **and applied
-successfully** — the real Vultr firewall group now exists (zero standing cost; the reserved
-IP stays unprovisioned). Only **Task 5, the live proof**, remains before this phase is done.
+**Egress migration (`SE`, BI-D5) — `implementing`.** PR1 merged and applied
+([#57](https://github.com/glunk-works/bounty-infra/pull/57)). All three prerequisites for
+Task 5 (the live proof) are done — **ready to dispatch.**
 
 ## Just done
 
-- **Implemented, critic-passed, and merged PR1**: `infra/` gains the Vultr provider and two
-  persistent resources (free no-ingress firewall group; `reserved_ip_enabled`-toggled
-  reserved IP, default off — zero standing cost, SE-MG5); `build-image.yml` now pushes to
-  public GHCR instead of ECR/ECS (SE-MG3); `run-scan.yml` launches/polls/always-destroys a
-  per-scan Vultr VM through a session-policy-scoped STS credential + an S3 status-sentinel
-  completion signal (SE-MG1/MG2), replacing `ecs run-task`. AWS Fargate/ECS resources are
-  left in place as a fallback pending PR2. Merge commit `920eb4c`.
-- **Found and fixed a pre-existing bug in `plan-infra.yml`**: `opentofu/setup-opentofu`'s
-  wrapper script normalizes `-detailed-exitcode`'s two success codes (0 = no changes, 2 =
-  changes present) to the same process exit 0, so a script reading raw `$?` — as this
-  workflow's plan step does — can never tell them apart. Fixed with `tofu_wrapper: false`.
-  Latent since the workflow's creation; PR1 was the first PR since bootstrap to put a real
-  `infra/` diff in front of it, which is why it never surfaced before. Never a BI-D2
-  visible-plan gap — the real resource-change table (read from `plan.json`, independent of
-  `$?`) was correct throughout; only a diagnostic line was wrong.
-- **Applied PR1.** First attempt failed: Vultr rejected the API call with a 401
-  (`"Unauthorized IP address"`) — the `VULTR_API_KEY` had an IP access-control allowlist
-  that didn't include GitHub Actions' ephemeral runner IPs. Operator removed the
-  restriction; the retry succeeded.
-- **Cursor synced** as [#58](https://github.com/glunk-works/bounty-infra/pull/58) and
-  [#59](https://github.com/glunk-works/bounty-infra/pull/59), both merged.
+- **PR1 merged and applied**: Vultr provider + firewall group live in the real account (zero
+  standing cost); `build-image.yml` pushes to public GHCR; `run-scan.yml` is the Vultr
+  launch/poll/destroy loop. Found and fixed a pre-existing `plan-infra.yml` bug along the way
+  (`opentofu/setup-opentofu`'s wrapper swallowed `-detailed-exitcode`'s real code — fixed with
+  `tofu_wrapper: false`).
+- **`ghcr.io/glunk-works/bounty-scanner` flipped to public** on GitHub.
+- **Cross-repo prerequisite landed**: `global-bootstrap`
+  [#3](https://github.com/glunk-works/global-bootstrap/pull/3) (the `bounty-scanner-s3-writer`
+  role) merged and applied locally; `AWS_SCANNER_WRITER_ROLE_ARN` is in bounty-infra's
+  Infisical.
+- **RoE placed for the live target**: `s3://seuss-bounty-infra-findings/roe/DIB-VDP/scope.json`
+  uploaded by the operator. Content validated in-session against the real `Program` pydantic
+  schema and `translate_program_scope` — produces exactly one in-scope pattern
+  (`^ztna\.myngc\.com$`), zero dropped entries. **This is a real, operator-confirmed-authorized
+  program (DIB-VDP), not the sprint plan's originally-described hermetic operator-owned-domain
+  proof** — say so plainly in the next update; a live result against a real program and a
+  hermetic operator-owned-domain result are different claims.
 
 ## Next
 
-- **HITL Gate: OPEN.** Task 5 (the live proof) is fully operator-gated:
-  1. Flip `ghcr.io/glunk-works/bounty-scanner` to **public** visibility on GitHub (Packages →
-     package settings; GHCR defaults new packages private and nothing in `build-image.yml`
-     can change that).
-  2. Confirm the **cross-repo prerequisite** (Task 1, `global-bootstrap` — separate repo) has
-     landed: the `bounty-scanner-s3-writer` role (trust admits `run-scan.yml`'s existing OIDC
-     subject; S3 PutObject to findings + `runs/*/status.json`, GetObject on the RoE object,
-     KMS DataKey). `run-scan.yml` cannot authenticate until this exists.
-  3. Dispatch `run-scan.yml` against an **operator-owned domain** (with a minimal RoE
-     `scope.json` placed in S3 for that target), `use_reserved_ip=false`, and an `image_tag`
-     from a `build-image.yml` run. Confirm: a Vultr instance boots, the scan runs, findings
-     land in S3 **from the Vultr IP**, the status sentinel drives a clean exit, the instance
-     is destroyed.
+- **HITL Gate: OPEN — dispatch is the operator's call.** Not something a coder auto-starts:
+  this fires live scanning traffic at a real, third-party-adjacent target. A coder may prep
+  (confirm an `image_tag` exists on GHCR from PR1's build — merge commit `920eb4c` — or
+  trigger a fresh `build-image.yml` run) but should not fire the dispatch unattended.
+- **Dispatch `run-scan.yml`**: `target_domain=ztna.myngc.com`, `program=DIB-VDP`,
+  `use_reserved_ip=false`, `image_tag=<confirmed sha>`. Confirm: a Vultr instance boots, the
+  scan runs, findings land in S3 **from the Vultr IP**, the status sentinel drives a clean
+  exit, the instance is destroyed. That confirmation **is** the Phase-1 DoD (with the caveat
+  above about it being a live-program result, not the originally-scoped hermetic one).
 
 ## Queued behind the live proof
 
@@ -61,16 +52,13 @@ IP stays unprovisioned). Only **Task 5, the live proof**, remains before this ph
 
 ## Still-open operator gates (a coder cannot do these)
 
-- **S1 RoE `scope.json` doesn't exist**; **UA contact-URL** check
-  (`https://hackerone.com/seuss`). Both gate any *real-program* scan — SE's Phase-1 proof
-  deliberately uses an **operator-owned** target to avoid this.
 - **Reserved IP** — provision only when onboarding a program that mandates source-IP
   registration (MG5): flip `reserved_ip_enabled`, apply, register, dispatch with
   `use_reserved_ip=true`. The `reserved_ipv4` field's exact semantics (id vs. address) are
   noted in `run-scan.yml` as unverified against a live call — confirm before the first such
   dispatch.
-- **GHCR package visibility** — flip to public after the first `build-image.yml` push,
-  before any scan can pull the image.
+- **Proactive abuse-team notification to Vultr** (BI-D5) — not yet done; should happen before
+  or alongside the first live scan, per the sprint plan's operator procedural gates.
 
 ## Pointers
 
