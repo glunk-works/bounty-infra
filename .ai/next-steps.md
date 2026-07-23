@@ -6,48 +6,57 @@ Regenerate this at the end of every working session.
 
 ## Now
 
-**Egress migration (`SE`, BI-D5) — `awaiting_review`.** PR1 (Phase 1, additive) is
-implemented, green-gated, critic-passed, and open as
-[#57](https://github.com/glunk-works/bounty-infra/pull/57). **Waiting on human review +
-merge.**
+**Egress migration (`SE`, BI-D5) — `blocked` on operator actions.** PR1 (Phase 1, additive)
+merged as [#57](https://github.com/glunk-works/bounty-infra/pull/57). Merging it queued a
+real `tofu apply` — it's now sitting on the `production` Environment's required-reviewer
+gate (BI-D2), waiting on approval.
 
 ## Just done
 
-- **Implemented PR1** on `sprint/se-t2-t4-vultr-standup`: `infra/` gains the Vultr provider
-  and two persistent resources (free no-ingress firewall group; `reserved_ip_enabled`-toggled
-  reserved IP, default off — zero standing cost, SE-MG5); `build-image.yml` now pushes to
-  public GHCR instead of ECR/ECS (SE-MG3); `run-scan.yml` launches/polls/always-destroys a
-  per-scan Vultr VM through a session-policy-scoped STS credential + an S3 status-sentinel
-  completion signal (SE-MG1/MG2), replacing `ecs run-task`. AWS Fargate/ECS resources are
-  left in place as a fallback pending PR2. Commit `ed7962c`.
-- **Ran `/critic-gate`** (`architect` + `security-critic`, parallel, read-only). Found and
-  fixed one blocker — the cloud-init `docker run` never passed the STS creds/bucket name
-  into the container, so the scan would have exited 1 before ever reaching S3 — plus an
-  unvalidated `severities` input reaching the VM's shell, an orphaned-VM window in the
-  `always()` teardown step, and a timeout/session-duration edge case. Documented (not
-  code-fixable): GHCR defaults a new package to private on first push — one-time operator
-  step before the first dispatch. Fix commit `9a2247e`. Full green gate (lint, test, tofu
-  fmt/validate, tflint, zizmor) re-ran clean after.
-- **Opened PR1**: [#57](https://github.com/glunk-works/bounty-infra/pull/57).
+- **Implemented and merged PR1**: `infra/` gains the Vultr provider and two persistent
+  resources (free no-ingress firewall group; `reserved_ip_enabled`-toggled reserved IP,
+  default off — zero standing cost, SE-MG5); `build-image.yml` now pushes to public GHCR
+  instead of ECR/ECS (SE-MG3); `run-scan.yml` launches/polls/always-destroys a per-scan
+  Vultr VM through a session-policy-scoped STS credential + an S3 status-sentinel completion
+  signal (SE-MG1/MG2), replacing `ecs run-task`. AWS Fargate/ECS resources are left in place
+  as a fallback pending PR2. Merge commit `920eb4c`.
+- **Ran `/critic-gate`** (`architect` + `security-critic`, parallel, read-only) before
+  merge. Found and fixed one blocker — the cloud-init `docker run` never passed the STS
+  creds/bucket name into the container, so the scan would have exited 1 before ever reaching
+  S3 — plus an unvalidated `severities` input reaching the VM's shell, an orphaned-VM window
+  in the `always()` teardown step, and a timeout/session-duration edge case.
+- **Found and fixed a pre-existing bug in `plan-infra.yml`**, surfaced while investigating
+  why PR1's `tofu-plan` check showed "0 changes" for a brand-new resource:
+  `opentofu/setup-opentofu`'s wrapper script normalizes `-detailed-exitcode`'s two success
+  codes (0 = no changes, 2 = changes present) to the same process exit 0, so a script reading
+  raw `$?` can never tell them apart. Fixed with `tofu_wrapper: false`. Latent since the
+  workflow's creation — PR1 was the first PR since bootstrap to put a real `infra/` diff in
+  front of it, which is why it never surfaced before. The real resource-change table (read
+  from `plan.json`, independent of `$?`) was correct throughout; this was never a BI-D2
+  visible-plan gap, just a misleading diagnostic line.
+- **Cursor synced** as [#58](https://github.com/glunk-works/bounty-infra/pull/58), merged.
 
 ## Next
 
-- **HITL Gate: OPEN.** PR1 (#57) needs human review + merge — a coder cannot merge its own
-  PR.
-- **After merge:** run **Task 5, the live proof** (operator-triggered, not auto-startable) —
-  dispatch `run-scan.yml` against an **operator-owned domain** (with a minimal RoE
-  `scope.json` placed in S3 for that target), `use_reserved_ip=false`. Confirm: a Vultr
-  instance boots, the scan runs, findings land in S3 **from the Vultr IP**, the status
-  sentinel drives a clean exit, the instance is destroyed.
-  - **Before that first dispatch:** flip `ghcr.io/glunk-works/bounty-scanner` to public
-    visibility on GitHub (Packages → package settings) — GHCR defaults new packages private
-    and nothing in `build-image.yml` can change that.
+- **HITL Gate: OPEN (two, in sequence).**
+  1. **Approve the pending apply** —
+     [run 30013497825](https://github.com/glunk-works/bounty-infra/actions/runs/30013497825)
+     is parked on the `production` Environment reviewer gate for PR1's merge. A coder cannot
+     approve its own deploy. Approving it creates the real `vultr_firewall_group` (still zero
+     standing cost — the reserved IP stays unprovisioned).
+  2. **After that apply succeeds:** run **Task 5, the live proof** (operator-triggered) —
+     flip `ghcr.io/glunk-works/bounty-scanner` to **public** visibility on GitHub (Packages →
+     package settings; GHCR defaults new packages private and nothing in `build-image.yml`
+     can change that), then dispatch `run-scan.yml` against an **operator-owned domain**
+     (with a minimal RoE `scope.json` placed in S3 for that target), `use_reserved_ip=false`.
+     Confirm: a Vultr instance boots, the scan runs, findings land in S3 **from the Vultr
+     IP**, the status sentinel drives a clean exit, the instance is destroyed.
   - **Cross-repo prerequisite (Task 1, `global-bootstrap` — separate repo):** the
     `bounty-scanner-s3-writer` role must land (trust admits `run-scan.yml`'s existing OIDC
     subject; S3 PutObject to findings + `runs/*/status.json`, GetObject on the RoE object,
     KMS DataKey) before `run-scan.yml` can authenticate at all.
 
-## Queued behind PR1 + the live proof
+## Queued behind the live proof
 
 - **PR2 (teardown)** — delete the AWS Fargate/VPC/ECR/IAM estate as a destroys-only,
   summarized plan (BI-D2); docs pass; mark SE done; close #11. Only after the Phase-1 proof.
@@ -67,6 +76,10 @@ merge.**
   dispatch.
 - **GHCR package visibility** — flip to public after the first `build-image.yml` push,
   before any scan can pull the image.
+- Two unrelated, long-stale `deploy-infra.yml` runs (from PRs #35, #27, merged 2026-07-21)
+  are still parked "pending"/"waiting" on the same production-environment gate, 40+ hours
+  old — likely abandoned/no-op by now, but worth a look (approve-and-verify-no-op, or
+  dismiss) next time someone's in the Actions tab.
 
 ## Pointers
 
