@@ -240,6 +240,13 @@ jobs:
           role-duration-seconds: ${{ env.SCOPED_SESSION_DURATION }}
           inline-session-policy: ${{ env.SESSION_POLICY }}
           aws-region: ${{ env.AWS_REGION }}
+          # bounty-scanner-s3-writer's trust policy (global-bootstrap) grants
+          # sts:AssumeRole only, not sts:TagSession -- the action's default
+          # session tags make the AssumeRole call itself fail. Nothing here
+          # reads session tags for authorization (the inline policy above is
+          # what scopes the session), so skip tagging instead of widening
+          # the trust policy for a value no one consumes.
+          role-skip-session-tagging: true
 
       - name: Render cloud-init user-data
         env:
