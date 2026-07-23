@@ -7,6 +7,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
@@ -193,8 +194,25 @@ def run_recon_pipeline(
     so the first filter is *currently* a superset of the second -- that is
     a property of today's flags, not the design, so both stages run
     unconditionally.
+
+    `timeout` is a budget for the WHOLE pipeline, not a per-tool allowance
+    -- run-scan.yml's poll deadline and its scoped AWS session (SE-MG2)
+    are both sized as `timeout + 300s`, on the assumption of one shared
+    budget. Passing `timeout` unchanged to all three subprocess.run calls
+    would let the pipeline legitimately run up to 3x `timeout` without any
+    single stage ever tripping its own timeout -- outliving both the poll
+    deadline and the VM's AWS credentials, so the run gets killed before
+    upload_to_s3 ever runs (confirmed live: SE Task 5's first dispatch hit
+    exactly this).
     """
     findings = []
+    pipeline_deadline = time.monotonic() + timeout
+
+    def _stage_timeout(cmd: "list[str]") -> float:
+        remaining = pipeline_deadline - time.monotonic()
+        if remaining <= 0:
+            raise subprocess.TimeoutExpired(cmd, timeout)
+        return remaining
 
     # Create temporary files for standard output routing. mkstemp, not
     # NamedTemporaryFile: these are used by *path* -- subprocesses open and
@@ -220,12 +238,13 @@ def run_recon_pipeline(
 
     try:
         logger.info(f"Running subfinder on {domain}...")
+        subfinder_cmd = ["subfinder", "-d", domain, "-silent"]
         with open(artifacts.subs_file, "w") as f_out:
             subprocess.run(
-                ["subfinder", "-d", domain, "-silent"],
+                subfinder_cmd,
                 stdout=f_out,
                 check=True,
-                timeout=timeout,
+                timeout=_stage_timeout(subfinder_cmd),
             )
 
         # Check if subfinder found anything before continuing
@@ -247,24 +266,25 @@ def run_recon_pipeline(
                 logger.warning("Every discovered host was out of scope.")
             else:
                 logger.info("Running httpx for liveness check...")
+                httpx_cmd = [
+                    "httpx",
+                    "-silent",
+                    "-rl",
+                    str(rate_limit),
+                    "-t",
+                    str(concurrency),
+                    *header_args,
+                ]
                 with (
                     open(filtered_subs_file, "r") as f_in,
                     open(artifacts.live_file, "w") as f_out,
                 ):
                     subprocess.run(
-                        [
-                            "httpx",
-                            "-silent",
-                            "-rl",
-                            str(rate_limit),
-                            "-t",
-                            str(concurrency),
-                            *header_args,
-                        ],
+                        httpx_cmd,
                         stdin=f_in,
                         stdout=f_out,
                         check=True,
-                        timeout=timeout,
+                        timeout=_stage_timeout(httpx_cmd),
                     )
 
                 if os.path.getsize(artifacts.live_file) > 0:
@@ -286,28 +306,29 @@ def run_recon_pipeline(
                         logger.info(
                             f"Running nuclei scanning for severities: {severities}..."
                         )
+                        nuclei_cmd = [
+                            "nuclei",
+                            "-s",
+                            severities,
+                            "-jsonl",
+                            "-silent",
+                            "-rl",
+                            str(rate_limit),
+                            "-c",
+                            str(concurrency),
+                            *header_args,
+                        ]
                         with (
                             open(filtered_live_file, "r") as f_in,
                             open(artifacts.nuclei_file, "w") as f_out,
                         ):
                             # NUCLEI LEVEL FILTERING: Using the -s flag to filter severities at the engine level
                             subprocess.run(
-                                [
-                                    "nuclei",
-                                    "-s",
-                                    severities,
-                                    "-jsonl",
-                                    "-silent",
-                                    "-rl",
-                                    str(rate_limit),
-                                    "-c",
-                                    str(concurrency),
-                                    *header_args,
-                                ],
+                                nuclei_cmd,
                                 stdin=f_in,
                                 stdout=f_out,
                                 check=True,
-                                timeout=timeout,
+                                timeout=_stage_timeout(nuclei_cmd),
                             )
 
                         # Read the nuclei output line-by-line (highly memory efficient)
