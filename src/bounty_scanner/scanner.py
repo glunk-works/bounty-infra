@@ -9,7 +9,6 @@ import sys
 import tempfile
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import List, Optional
 from urllib.parse import urlparse
 
 import boto3
@@ -49,13 +48,13 @@ UNTRUSTED_DATA_FENCE_END = "</UNTRUSTED_SCAN_DATA>"
 
 @dataclass
 class ReconArtifacts:
-    findings: List[dict]
+    findings: list[dict]
     subs_file: str
     live_file: str
     nuclei_file: str
     # S1 Task 3: hosts dropped by the discovered-set / pre-nuclei scope
     # filters. Written to their own S3 artifact -- NEVER a log line (BI-D4).
-    dropped_hosts: List[str] = field(default_factory=list)
+    dropped_hosts: list[str] = field(default_factory=list)
     dropped_out_of_scope_count: int = 0
 
 
@@ -68,7 +67,7 @@ class Finding(BaseModel):
 
 
 class TriageReport(BaseModel):
-    top_findings: List[Finding] = Field(..., description="Top 3 critical findings.")
+    top_findings: list[Finding] = Field(..., description="Top 3 critical findings.")
     summary: str = Field(..., description="Executive summary of risks.")
 
 
@@ -88,7 +87,7 @@ def _filter_hosts_by_scope(
     rules: ScopeRules,
     input_path: str,
     output_path: str,
-    dropped_sink: List[str],
+    dropped_sink: list[str],
     *,
     extract_hostname: bool = False,
 ) -> "tuple[int, int]":
@@ -129,14 +128,14 @@ def _filter_hosts_by_scope(
 
 
 def _identification_headers(
-    identification: Optional[Identification],
+    identification: Identification | None,
 ) -> "dict[str, str]":
     if identification is None:
         return {}
     return dict(identification.headers)
 
 
-def _tool_header_args(user_agent: str, extra_headers: "dict[str, str]") -> List[str]:
+def _tool_header_args(user_agent: str, extra_headers: "dict[str, str]") -> list[str]:
     """S1 Task 4: identical `-H` shape for httpx and nuclei -- both accept
     repeated `-H "Key: Value"` flags, and both apply an explicit User-Agent
     header verbatim rather than substituting their own default (verified
@@ -159,7 +158,7 @@ def _tool_header_args(user_agent: str, extra_headers: "dict[str, str]") -> List[
     return args
 
 
-def build_user_agent(contact_url: str, identification: Optional[Identification]) -> str:
+def build_user_agent(contact_url: str, identification: Identification | None) -> str:
     """S1 Task 4. Locked shape: `bounty-scanner/<version> (+<contact_url>)`
     -- platform-neutral, `+URL` bot convention, RFC 9110 product/version
     token. `<version>` is read from installed package metadata, never
@@ -197,32 +196,25 @@ def run_recon_pipeline(
     """
     findings = []
 
-    # Create temporary files for standard output routing
-    subs_file = tempfile.NamedTemporaryFile(mode="w+", delete=False, suffix=".txt")
-    filtered_subs_file = tempfile.NamedTemporaryFile(
-        mode="w+", delete=False, suffix=".txt"
-    )
-    live_file = tempfile.NamedTemporaryFile(mode="w+", delete=False, suffix=".txt")
-    filtered_live_file = tempfile.NamedTemporaryFile(
-        mode="w+", delete=False, suffix=".txt"
-    )
-    nuclei_file = tempfile.NamedTemporaryFile(mode="w+", delete=False, suffix=".jsonl")
+    # Create temporary files for standard output routing. mkstemp, not
+    # NamedTemporaryFile: these are used by *path* -- subprocesses open and
+    # write to them independently, never through a lingering file object --
+    # so there is no block to hold them open across.
+    subs_fd, subs_file = tempfile.mkstemp(suffix=".txt")
+    filtered_subs_fd, filtered_subs_file = tempfile.mkstemp(suffix=".txt")
+    live_fd, live_file = tempfile.mkstemp(suffix=".txt")
+    filtered_live_fd, filtered_live_file = tempfile.mkstemp(suffix=".txt")
+    nuclei_fd, nuclei_file = tempfile.mkstemp(suffix=".jsonl")
 
-    # Close them so subprocesses can open and write to them safely
-    for handle in (
-        subs_file,
-        filtered_subs_file,
-        live_file,
-        filtered_live_file,
-        nuclei_file,
-    ):
-        handle.close()
+    # Close the fds immediately -- subprocesses reopen these paths themselves
+    for fd in (subs_fd, filtered_subs_fd, live_fd, filtered_live_fd, nuclei_fd):
+        os.close(fd)
 
     artifacts = ReconArtifacts(
         findings=findings,
-        subs_file=subs_file.name,
-        live_file=live_file.name,
-        nuclei_file=nuclei_file.name,
+        subs_file=subs_file,
+        live_file=live_file,
+        nuclei_file=nuclei_file,
     )
     header_args = _tool_header_args(user_agent, extra_headers)
 
@@ -241,7 +233,7 @@ def run_recon_pipeline(
             kept, dropped = _filter_hosts_by_scope(
                 rules,
                 artifacts.subs_file,
-                filtered_subs_file.name,
+                filtered_subs_file,
                 artifacts.dropped_hosts,
             )
             artifacts.dropped_out_of_scope_count += dropped
@@ -256,7 +248,7 @@ def run_recon_pipeline(
             else:
                 logger.info("Running httpx for liveness check...")
                 with (
-                    open(filtered_subs_file.name, "r") as f_in,
+                    open(filtered_subs_file, "r") as f_in,
                     open(artifacts.live_file, "w") as f_out,
                 ):
                     subprocess.run(
@@ -279,7 +271,7 @@ def run_recon_pipeline(
                     kept2, dropped2 = _filter_hosts_by_scope(
                         rules,
                         artifacts.live_file,
-                        filtered_live_file.name,
+                        filtered_live_file,
                         artifacts.dropped_hosts,
                         extract_hostname=True,
                     )
@@ -295,7 +287,7 @@ def run_recon_pipeline(
                             f"Running nuclei scanning for severities: {severities}..."
                         )
                         with (
-                            open(filtered_live_file.name, "r") as f_in,
+                            open(filtered_live_file, "r") as f_in,
                             open(artifacts.nuclei_file, "w") as f_out,
                         ):
                             # NUCLEI LEVEL FILTERING: Using the -s flag to filter severities at the engine level
@@ -342,9 +334,9 @@ def run_recon_pipeline(
         # Cleanup ephemeral disk space once the context manager exits
         for path in [
             artifacts.subs_file,
-            filtered_subs_file.name,
+            filtered_subs_file,
             artifacts.live_file,
-            filtered_live_file.name,
+            filtered_live_file,
             artifacts.nuclei_file,
         ]:
             if os.path.exists(path):
@@ -352,8 +344,8 @@ def run_recon_pipeline(
 
 
 def triage_findings(
-    findings: List[dict], target_severities: set, max_findings: int
-) -> Optional[TriageReport]:
+    findings: list[dict], target_severities: set, max_findings: int
+) -> TriageReport | None:
     """Uses Gemini to triage findings with strict token/context management.
 
     Triage output is ADVISORY ONLY (S1 Task 5c): it is printed and
@@ -452,20 +444,21 @@ def triage_findings(
             ),
         )
         return TriageReport.model_validate_json(response.text)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 -- triage is advisory-only (S1 Task 5c):
+        # any failure of the LLM call/SDK/schema validation must degrade to
+        # "no triage" rather than crash the scan, so it deliberately catches
+        # everything the client library or validation can raise.
         logger.error(f"LLM triage failed: {e}")
         return None
 
 
-def upload_to_s3(
-    domain: str, report: Optional[TriageReport], artifacts: ReconArtifacts
-):
+def upload_to_s3(domain: str, report: TriageReport | None, artifacts: ReconArtifacts):
     bucket_name = os.environ.get("S3_BUCKET_NAME")
     if not bucket_name:
         logger.warning("No S3_BUCKET_NAME env var found. Skipping S3 upload.")
         return
 
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.datetime.now(datetime.UTC).strftime("%Y%m%d_%H%M%S")
     s3 = boto3.client("s3")
 
     # Define S3 prefix structures
@@ -516,7 +509,10 @@ def upload_to_s3(
             )
 
         logger.info("Upload complete.")
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 -- an artifact-upload failure must
+        # not crash a scan that already ran to completion; boto3/S3 can raise
+        # from several distinct exception hierarchies (ClientError, disk I/O
+        # on upload_file, etc.) and all of them are equally non-fatal here.
         logger.error(f"Failed to upload to S3: {e}")
 
 
@@ -535,7 +531,7 @@ def upload_scan_metadata(
     if not bucket_name:
         return
 
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.datetime.now(datetime.UTC).strftime("%Y%m%d_%H%M%S")
     s3 = boto3.client("s3")
     metadata = {
         "domain": domain,
@@ -551,7 +547,8 @@ def upload_scan_metadata(
             Key=f"{domain}/{timestamp}/scan_metadata.json",
             Body=json.dumps(metadata, indent=2),
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 -- same rationale as upload_to_s3:
+        # a metadata-upload failure must not crash an already-completed scan.
         logger.error(f"Failed to upload scan metadata: {e}")
 
 
