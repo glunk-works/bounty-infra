@@ -331,6 +331,45 @@ def test_run_recon_pipeline_subprocess_timeout(mocker):
         assert artifacts.findings == []
 
 
+def test_run_recon_pipeline_timeout_is_one_shared_budget_not_per_tool(mocker):
+    """SE Task 5 live proof (first dispatch): run-scan.yml's poll deadline
+    and scoped AWS session are both sized as `timeout + 300s`, on the
+    assumption that `timeout` bounds the WHOLE pipeline. Giving each of
+    subfinder/httpx/nuclei its own full `timeout` let the pipeline run up
+    to 3x that budget without any single subprocess.run call ever timing
+    out -- outliving the poll deadline and the VM's credentials, so the
+    scan got killed before anything reached S3. Elapsed time must instead
+    eat into a single shared budget: once it's gone, a later stage must
+    never run, not run with a fresh full allowance."""
+    calls_seen: list = []
+    mocker.patch(
+        "bounty_scanner.scanner.subprocess.run",
+        side_effect=_make_subprocess_side_effect(
+            calls_seen,
+            {
+                "subfinder": ["example.com"],
+                "httpx": ["https://example.com"],
+                "nuclei": [json.dumps({"template-id": "t", "info": {"severity": "high"}})],
+            },
+        ),
+    )
+    # deadline = 0 + 100; subfinder/httpx each see enough of the budget
+    # left to proceed, but by the time nuclei's stage-timeout is computed
+    # the shared 100s budget is already spent.
+    mocker.patch(
+        "bounty_scanner.scanner.time.monotonic",
+        side_effect=[0, 10, 60, 200],
+    )
+
+    with run_recon_pipeline(
+        "example.com", PERMISSIVE_RULES, TEST_UA, {}, timeout=100
+    ) as artifacts:
+        assert artifacts.findings == []
+
+    tools_run = [c[0][0] for c in calls_seen]
+    assert tools_run == ["subfinder", "httpx"]  # nuclei never got a turn
+
+
 def test_run_recon_pipeline_nuclei_severity_flag_still_applied(mocker):
     calls_seen: list = []
     mocker.patch(
