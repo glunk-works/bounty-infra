@@ -82,6 +82,7 @@ jobs:
             -var="aws_region=${AWS_REGION}" \
             -var="findings_bucket_name=${FINDINGS_BUCKET_NAME}" \
             -var="kms_key_arn=${KMS_KEY_ARN}" \
+            -var="vultr_api_key=${VULTR_API_KEY}" \
             >apply.stdout 2>apply.stderr
           CODE=$?
           set -e

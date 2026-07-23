@@ -76,9 +76,18 @@ jobs:
           role-to-assume: ${{ env.AWS_PLAN_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
+      # tofu_wrapper: false -- the default wrapper normalizes -detailed-exitcode's
+      # 0 (no changes) AND 2 (changes present) to the same process exit 0 (see
+      # opentofu/setup-opentofu's wrapper/tofu.js: `if (exitCode === 0 ||
+      # exitCode === 2) { return; }`), so a script reading raw `$?` -- as the
+      # next step does -- can never tell the two apart. The action's own docs
+      # flag this exact symptom. This predates SE; it just never manifested
+      # before because no prior PR introduced a real infra/ diff to detect.
       - name: Setup OpenTofu Core
         if: steps.changes.outputs.infra == 'true'
         uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_wrapper: false
 
       - name: OpenTofu plan
         if: steps.changes.outputs.infra == 'true'
@@ -103,6 +112,7 @@ jobs:
             -var="aws_region=${AWS_REGION}" \
             -var="findings_bucket_name=${FINDINGS_BUCKET_NAME}" \
             -var="kms_key_arn=${KMS_KEY_ARN}" \
+            -var="vultr_api_key=${VULTR_API_KEY}" \
             >plan.stdout 2>plan.stderr
           CODE=$?
           set -e
