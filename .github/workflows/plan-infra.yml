@@ -121,6 +121,19 @@ jobs:
             exit 1
           fi
 
+      # TEMPORARY DIAGNOSTIC -- to be removed before merge. `tofu state list`
+      # prints resource ADDRESSES only (the same disclosure class BI-D4 already
+      # allows for the plan summary below) -- investigating an unexpected
+      # exit-code-0 plan for a brand-new resource.
+      - name: DIAGNOSTIC state list
+        if: steps.changes.outputs.infra == 'true'
+        working-directory: ./infra
+        run: |
+          set -euo pipefail
+          echo "--- tofu state list ---"
+          tofu state list
+          echo "--- end state list ---"
+
       - name: Summarize plan (addresses + counts only)
         if: steps.changes.outputs.infra == 'true'
         working-directory: ./infra
