@@ -6,32 +6,56 @@ Regenerate this at the end of every working session.
 
 ## Now
 
-**Session 6 (Sonnet, T5) SHIPPED — cursor corrected 2026-07-22 (Opus). The next action is
-session 7 (Opus): disposition the findings.** A prior session's `state.json` still read "confirm
-the dirty tree, then `/ship` both files" — that ship is **already done**: `docs/roe_operator_runbook.md`
-+ `sprints/SW_way_of_working/task5_session6_findings.md` are committed (`008911c`) and open as
-**[#49](https://github.com/glunk-works/bounty-infra/pull/49)** (all 10 checks green, MERGEABLE).
-`last_commit` was pointing at `cb6d698`, which is **PR #48's** head, not this branch's tip — now
-fixed to `008911c`.
+**Session 7 (Opus, T5) DONE — SW is complete. The six findings are dispositioned, the plugin fix is
+merged and tagged `v0.3.0`, and this repo's pin is bumped to it. This PR ([#50](https://github.com/glunk-works/bounty-infra/pull/50))
+carries the pin bump + this cursor; on its merge, SW closes and #19 closes.** Disposition PR:
+**[claude-workbench#4](https://github.com/glunk-works/claude-workbench/pull/4) — MERGED** (`35229dc`),
+recorded upstream as **WB-D6**; tagged **`v0.3.0`** on the merged head.
 
-**Two work-product PRs are open and await the human's merge, in this order:**
-- **[#48](https://github.com/glunk-works/bounty-infra/pull/48)** — `docs(SW): adopt the way-of-working
-  plugin (T4)` (commits `45280f7` + `cb6d698`; the plugin adoption itself, **not yet in `main`**).
-- **[#49](https://github.com/glunk-works/bounty-infra/pull/49)** — session-6 runbook + findings log
-  (`008911c`; cut from `main` **independently** of #48 — its only non-main commit is `008911c`, so
-  it carries none of #48's T4 changes).
+**Post-merge follow-through, done this session (Opus):**
+- **`v0.3.0` cut** on claude-workbench `main` (`35229dc`), pushed and verified to resolve to the
+  merged head.
+- **Pin bumped** — `.claude/settings.json` marketplace `ref` `v0.2.0` → `v0.3.0` (in this PR).
+- **Stale checkout cleared** — deleted `…/Temp/cw_tag_checkout` (was pinned to `v0.1.0`, confirming
+  the mirage); the harness re-clones `v0.3.0` on next plugin load. Verified the `v0.3.0` tag content
+  directly: `resume/SKILL.md` has 4 `{key}` refs and **0** loop-orch literals, and the
+  `/critic-gate` new-doc row is present. **Final end-to-end proof is the next fresh session's
+  `/resume`** loading `v0.3.0` (a harness command this session cannot self-invoke).
 
-**Then session 7 (Opus, T5 disposition):** read `sprints/SW_way_of_working/task5_session6_findings.md`
-and disposition each of its **six** findings (F1–F6 — the log's intro line still says "five",
-written before F6 was appended) exactly one of two ways: a **new schema key** (upstream fix in
-claude-workbench) or **not portable** (skill goes repo-local; say what WB-D4 got wrong). Overriding
-locally in bounty-infra is not a third option (BI-D11). F1–F4 share one root cause — the coupling
-grep only catches leaked *repo/org names*, so hardcoded *paths/values* (`docs/migration_roadmap.md`,
-`.ai/context/*`, loop-orchestrator's 8 required-check names) sailed through "zero hits." F5/F6 are
-scope/phrasing questions, not value bugs. Land the schema changes as a claude-workbench PR
-(human-merged), record reasoning per finding, then update this cursor to close SW and point at
-loop-orchestrator's adoption sprint. **#19 closes there.** The verbatim session-7 kickoff is in the
-sprint plan's § *Session 7*.
+**The reconciliation that reshaped this session — F1–F4 were a stale-cache mirage, not real
+portability bugs.** The findings quote loop-orchestrator literals, but the harness was serving a
+**stale `v0.1.0` local checkout** (`…/Temp/cw_tag_checkout`, verified `git describe` → `v0.1.0`)
+even though `.claude/settings.json` pins **`v0.2.0`**. `v0.1.0` is the Task-2 skeleton (skills
+copied as-is, coupled on purpose); the generalization that fixes F1–F4 — `{roadmap}`,
+`{ruleset.required_checks}`, `{models}`, `reference/workflow.md` — already shipped in `v0.2.0`
+(confirmed via `git show v0.2.0:…/resume/SKILL.md`). So session 6 (and this session's own
+`/resume`) reproduced F1–F4 only because the loaded skill was the un-generalized skeleton, not the
+pinned tag. **The real F1–F4 defect is operational (stale plugin cache), fixed repo-side below.**
+
+Per-finding disposition (full reasoning in claude-workbench `docs/decisions.md` § WB-D6):
+- **F1–F4** — already-fixed-upstream in `v0.2.0` via existing schema keys; **no plugin change**.
+- **Root cause guard** — `scripts/coupling-check.sh` gained a **Tier 3** of structural literal
+  *shapes* (`docs/<…>roadmap.md`, `.ai/context/<file>.md`) so a hardcoded *path* that isn't a
+  repo name is caught next time; bare `.ai/context/` stays legitimate; check *names* stay excluded
+  (they appear in `/pr-checks` example output — caught instead by reading `{ruleset.required_checks}`).
+- **F5** — `/critic-gate` gained a **new-doc proposal row** (a newly-added doc not yet in
+  `{load_bearing_docs}` → `docs-consistency`, plus `security-critic` for a security/operational
+  procedure). Derives from `git --diff-filter=A`; **no new schema key**.
+- **F6** — `/handoff` step 5 **clarified, not exempted**: the finding's "a `{pr_base}`-cut branch
+  can't carry the edit" rationale is wrong because `.ai/next-steps.md` is regenerated wholesale, so
+  a base-cut branch always applies — no permissive code-branch exception.
+
+**NEXT — HITL gate OPEN: the human merges [#50](https://github.com/glunk-works/bounty-infra/pull/50)**
+(this PR: pin bump `v0.3.0` + cursor). On merge, **SW closes and #19 closes** — nothing else in
+bounty-infra gates on it.
+
+**Then the next sprint is loop-orchestrator adoption (Phase 4), planned *in that repo*** (not here):
+delete its 7 local skills + 4 shared agents, add `project.yml` + `.claude/settings.json` pinning
+`claude-workbench@v0.3.0`, keep `mutation-triage`/`live-verify` local, and land Task 6's drift
+guard. Watch the schema-boundary test the plan calls out: adoption should need `review.ci_gate`
+populated and little else — if it needs several new keys, the boundary is wrong. **SW itself is
+bounty-infra's sprint — run `/archive-sprint` for it *here* once #50 merges**, not in
+loop-orchestrator. See the SW sprint plan's § *Follow-on*.
 
 ---
 
