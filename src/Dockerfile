@@ -10,7 +10,8 @@ FROM python:3.14-slim@sha256:cea0e6040540fb2b965b6e7fb5ffa00871e632eef63719f0ea5
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH="/opt/sec-ops/bin:${PATH}" \
-    NUCLEI_TEMPLATES_DIR="/opt/sec-ops/nuclei-templates"
+    NUCLEI_TEMPLATES_DIR="/opt/sec-ops/nuclei-templates" \
+    HOME="/opt/sec-ops"
 
 WORKDIR /opt/sec-ops
 RUN groupadd -r sec-ops && useradd -r -g sec-ops sec-ops
