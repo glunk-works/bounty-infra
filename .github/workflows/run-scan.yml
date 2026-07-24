@@ -298,6 +298,15 @@ jobs:
           # running under it, not just this dispatch's. Acceptable for a
           # deliberate, rare, single-IP-scoped debug session; removed again
           # in the Destroy step either way.
+          # OPERATOR_IP is stored as a CIDR ("x.x.x.x/32"), but Vultr's
+          # `subnet` field wants a bare IP with subnet_size as a separate
+          # field -- passing the CIDR string through as `subnet` verbatim
+          # doesn't error (Vultr accepts it and creates the rule), it just
+          # scopes the rule to a subnet nothing real ever matches, so it
+          # LOOKS like it worked while silently letting nothing through
+          # (confirmed live: rule created successfully, SSH still refused).
+          OPERATOR_IP_BARE="${OPERATOR_IP%%/*}"
+
           # No `-f`: on an HTTP error, curl -f discards the response body,
           # which is the one thing that would say WHY Vultr rejected the
           # request -- capture the status code and body explicitly instead
@@ -306,7 +315,7 @@ jobs:
           RESPONSE=$(curl -s -w '\n%{http_code}' -X POST "https://api.vultr.com/v2/firewalls/${FIREWALL_GROUP_ID}/rules" \
             -H "Authorization: Bearer ${VULTR_API_KEY}" \
             -H "Content-Type: application/json" \
-            -d "$(jq -n --arg ip "$OPERATOR_IP" '{ip_type: "v4", protocol: "tcp", subnet: $ip, subnet_size: 32, port: "22", notes: "SE debug -- temporary, opt-in per dispatch"}')")
+            -d "$(jq -n --arg ip "$OPERATOR_IP_BARE" '{ip_type: "v4", protocol: "tcp", subnet: $ip, subnet_size: 32, port: "22", notes: "SE debug -- temporary, opt-in per dispatch"}')")
           HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
           BODY=$(echo "$RESPONSE" | sed '$d')
           if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
