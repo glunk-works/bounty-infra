@@ -54,9 +54,22 @@ STAGE="docker-run"
 if ! timeout 120 apt-get update -y; then
   EXIT_CODE=$?
   STAGE="apt-get-update"
-elif ! timeout 180 apt-get install -y --no-install-recommends docker.io awscli; then
+elif ! timeout 180 apt-get install -y --no-install-recommends docker.io unzip curl; then
   EXIT_CODE=$?
   STAGE="apt-get-install"
+# Ubuntu 24.04's apt archive has no `awscli` installation candidate at all
+# (confirmed live via console debugging: "E: Package 'awscli' has no
+# installation candidate") -- every prior dispatch failed here, before the
+# docker run ever started, since apt-get install fails as a whole when one
+# of its packages has no candidate. AWS's own CLI v2 ships as a
+# self-contained zip installer, not an apt package, so that's what actually
+# works on this image.
+elif ! timeout 60 curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip; then
+  EXIT_CODE=$?
+  STAGE="awscli-download"
+elif ! timeout 60 bash -c 'cd /tmp && unzip -q awscliv2.zip && ./aws/install'; then
+  EXIT_CODE=$?
+  STAGE="awscli-install"
 else
   # `docker run` does not inherit the host shell's environment -- the retired
   # ECS task role delivered credentials to boto3 via the task-definition
@@ -88,7 +101,8 @@ fi
 # completion signal the launcher polls for. Written with the same scoped
 # session -- never a broader credential -- and it carries only an exit code
 # plus which stage produced it (apt-get-update / apt-get-install /
-# docker-run), never a finding or anything else target-derived.
+# awscli-download / awscli-install / docker-run), never a finding or
+# anything else target-derived.
 printf '{"exit_code": %s, "stage": "%s"}' "$EXIT_CODE" "$STAGE" > /tmp/status.json
 aws s3 cp /tmp/status.json "s3://${s3_bucket_name}/runs/${run_id}/status.json"
 
