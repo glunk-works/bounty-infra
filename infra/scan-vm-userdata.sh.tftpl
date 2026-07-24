@@ -9,14 +9,27 @@ set -uo pipefail
 # SE (BI-D5) per-scan VM entrypoint. This is a committed template, not a Tofu
 # resource -- run-scan.yml renders it with `envsubst` at instance-create time
 # and injects the short-lived STS session there, so no credential is ever
-# baked into Tofu state (SE-MG2). The VM has no ingress firewall rule, so
-# nothing reaches it from outside; nothing this script prints leaves the
-# instance's own console log, which no workflow retrieves (BI-D4).
+# baked into Tofu state (SE-MG2). The VM has no ingress firewall rule by
+# default (nothing reaches it from outside, and nothing this script prints
+# leaves the instance's own console log, which no workflow retrieves --
+# BI-D4) -- `operator_ssh_key` below is the one deliberate, opt-in exception,
+# empty on every normal scan.
 
 export AWS_ACCESS_KEY_ID="${aws_access_key_id}"
 export AWS_SECRET_ACCESS_KEY="${aws_secret_access_key}"
 export AWS_SESSION_TOKEN="${aws_session_token}"
 export AWS_DEFAULT_REGION="${aws_region}"
+
+# Debug only (run-scan.yml's enable_ssh_debug): empty on every normal scan,
+# so this is a no-op unless explicitly requested. run-scan.yml pairs this
+# with a matching temporary firewall rule -- the key alone is not reachable
+# without that rule too.
+if [ -n "${operator_ssh_key}" ]; then
+  mkdir -p /root/.ssh
+  printf '%s\n' "${operator_ssh_key}" >> /root/.ssh/authorized_keys
+  chmod 700 /root/.ssh
+  chmod 600 /root/.ssh/authorized_keys
+fi
 
 # Ubuntu 24.04's needrestart pops an interactive "which services should be
 # restarted?" prompt on any package install that touches a running service
