@@ -43,6 +43,11 @@ on:
         required: false
         default: false
         type: boolean
+      enable_ssh_debug:
+        description: 'Debug only: temporarily open SSH (port 22) to OPERATOR_IP on the shared firewall group and inject OPERATOR_SSH_KEY as an authorized key, removed again in the Destroy step. A deliberate, opt-in exception to BI-D5''s zero-ingress default -- leave false for every normal scan.'
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   execute-scan:
@@ -263,14 +268,47 @@ jobs:
           severities: ${{ inputs.severities }}
           scan_timeout: ${{ inputs.timeout }}
           max_findings: ${{ inputs.max_findings }}
+          ENABLE_SSH_DEBUG: ${{ inputs.enable_ssh_debug }}
         run: |
           set -euo pipefail
+          # operator_ssh_key only reaches the rendered script when
+          # enable_ssh_debug=true -- every normal scan VM gets an empty
+          # value, so scan-vm-userdata.sh.tftpl's own guard skips appending
+          # anything to authorized_keys (BI-D5: no reason to carry a
+          # debug-only credential onto a VM that never asked for it).
+          export operator_ssh_key="$([ "$ENABLE_SSH_DEBUG" = "true" ] && echo "$OPERATOR_SSH_KEY" || echo "")"
           # Explicit substitution list only -- the script's own shell
           # variables ($EXIT_CODE etc.) must survive rendering untouched.
-          vars='$aws_access_key_id $aws_secret_access_key $aws_session_token $aws_region $s3_bucket_name $run_id $image_ref $target_domain $program $contact_url $severities $scan_timeout $max_findings'
+          vars='$aws_access_key_id $aws_secret_access_key $aws_session_token $aws_region $s3_bucket_name $run_id $image_ref $target_domain $program $contact_url $severities $scan_timeout $max_findings $operator_ssh_key'
           envsubst "$vars" < infra/scan-vm-userdata.sh.tftpl > /tmp/user-data.sh
           base64 -w0 /tmp/user-data.sh > /tmp/user-data.b64
           rm -f /tmp/user-data.sh
+
+      - name: Open temporary SSH ingress for debugging
+        if: inputs.enable_ssh_debug
+        run: |
+          set -euo pipefail
+          if [ -z "${OPERATOR_IP:-}" ] || [ -z "${OPERATOR_SSH_KEY:-}" ]; then
+            echo "::error::enable_ssh_debug=true but OPERATOR_IP/OPERATOR_SSH_KEY are not set in Infisical -- refusing to open ingress with nothing to scope it to."
+            exit 1
+          fi
+          # FIREWALL_GROUP_ID is the SAME group every scan VM uses (SE-MG1) --
+          # this rule is added to that shared group, not to one VM, so it
+          # opens SSH (scoped to OPERATOR_IP only) on every VM currently
+          # running under it, not just this dispatch's. Acceptable for a
+          # deliberate, rare, single-IP-scoped debug session; removed again
+          # in the Destroy step either way.
+          RESPONSE=$(curl -sf -X POST "https://api.vultr.com/v2/firewall-groups/${FIREWALL_GROUP_ID}/rules" \
+            -H "Authorization: Bearer ${VULTR_API_KEY}" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n --arg ip "$OPERATOR_IP" '{ip_type: "v4", protocol: "tcp", subnet: $ip, subnet_size: 32, port: "22", notes: "SE debug -- temporary, opt-in per dispatch"}')")
+          RULE_ID=$(echo "$RESPONSE" | jq -r '.firewall_rule.id')
+          if [ -z "$RULE_ID" ] || [ "$RULE_ID" = "null" ]; then
+            echo "::error::Failed to create the debug SSH firewall rule: ${RESPONSE}"
+            exit 1
+          fi
+          echo "SSH_DEBUG_RULE_ID=${RULE_ID}" >> "$GITHUB_ENV"
+          echo "::warning::SSH debug ingress opened (port 22 from ${OPERATOR_IP}) on the shared firewall group -- will be removed in the Destroy step."
 
       - name: Create Vultr scan VM
         env:
@@ -360,6 +398,16 @@ jobs:
         run: |
           set -euo pipefail
           CURL='curl -sf --retry 3 --retry-delay 2'
+
+          # Independent of whether an instance was ever created (the SSH
+          # rule step runs before instance-create) -- clean it up either way
+          # so a failed create never leaves the shared firewall group with a
+          # standing SSH exception. Best-effort: nothing else can act on a
+          # leftover rule anyway.
+          if [ -n "${SSH_DEBUG_RULE_ID:-}" ]; then
+            $CURL -X DELETE "https://api.vultr.com/v2/firewall-groups/${FIREWALL_GROUP_ID}/rules/${SSH_DEBUG_RULE_ID}" \
+              -H "Authorization: Bearer ${VULTR_API_KEY}" || echo "::warning::Failed to remove debug SSH firewall rule ${SSH_DEBUG_RULE_ID} -- remove it manually from the Vultr dashboard."
+          fi
 
           # INSTANCE_ID is only set once the create step's response is fully
           # parsed -- if the job is cancelled between the Vultr API call
