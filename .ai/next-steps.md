@@ -7,11 +7,53 @@ Regenerate this at the end of every working session.
 ## Now
 
 **Egress migration (`SE`, BI-D5) — `implementing`.** Task 5 (the live proof) is still
-**not met**. Five bootstrap-robustness fixes landed this session, but the scan pipeline
-still never completes on a live VM — root cause unknown. SSH debug access now works
-end-to-end and is the next diagnostic step.
+**not met**. Five bootstrap-robustness fixes landed in the prior session, but the scan
+pipeline still never completes on a live VM — root cause unknown. A live SSH-debug
+session (this session) ruled out both suspects it could reach (firewall rule, SSH
+agent) without ruling out the underlying problem — see below.
 
-## Just done (this session — an incident-response chain, not planned work)
+## Just done (this session — live SSH-debug attempt, no code changed)
+
+- Dispatched `run-scan.yml` (`enable_ssh_debug=true`, `target_domain=scanme.nmap.org`,
+  `program=SANDBOX-NMAP`, `image_tag=324b3fee8eb7aa168f812229efb60fa0c4045086`) — run
+  [30096921939](https://github.com/glunk-works/bounty-infra/actions/runs/30096921939),
+  active ~13:27–14:02Z, VM `bounty-scanner-30096921939-1` @ `45.77.101.242`.
+- **~10 SSH connection attempts over ~30 minutes, effectively 0 successful logins**
+  (one anomalous host-key-fingerprint prompt, never followed by a completed shell).
+  Two suspects were raised and both were **cleared**:
+  - *SSH agent* — Bitwarden's ed25519 agent (`jared.groves.2`) confirmed working via
+    `ssh-add -l`, which listed the correct key. Not the cause.
+  - *Firewall rule* — the operator pulled up the Vultr dashboard directly and confirmed
+    the shared firewall group (`bounty-scanner egress-only`) held exactly **one**
+    correctly-scoped rule (`Accept SSH 22 from 70.105.250.102/32`), attached to the
+    right instance, no stale/duplicate rules. Not the cause.
+- **With both access-layer suspects cleared, the leading hypothesis shifted to the VM
+  itself** — its networking, or its boot generally, may never be fully coming up. This
+  would unify with the original still-unsolved mystery (the recon pipeline never
+  completing, zero status sentinel across 4 prior dispatches) under one root cause
+  instead of two unrelated ones.
+- A prior session's attempt at Vultr's web console/noVNC failed on what looked like a
+  Vultr-side proxy issue (instance API showed `running` at the time).
+- VM was torn down automatically by the Destroy step at the poll deadline (~14:02Z);
+  nothing further to inspect on that specific instance.
+- **Researched Vultr's console/noVNC requirements directly** (docs.vultr.com) to check
+  whether the scan VM is missing something needed for console access to work:
+  - Console access is 100% hypervisor-side (a noVNC view of the guest's virtual
+    framebuffer) — it needs **no agent or VNC software running inside the guest OS or
+    the scan container**. There is nothing to add to `scan-vm-userdata.sh.tftpl` or
+    `src/Dockerfile` for this; the premise that something was "missing" was wrong.
+  - The prior session's console failure almost certainly wasn't a real bug: per
+    [Vultr's Web Console FAQ](https://docs.vultr.com/vultr-web-console-faq), the
+    noVNC page's own **`Connect` button does not work for Vultr servers** — you must
+    click **`Restart Server`** from inside the Vultr Console view itself to get it to
+    attach. If that still fails: ping the IP, run an MTR report, then open a Vultr
+    support ticket with those results (Vultr's own documented escalation path).
+  - Cloud Compute instances have **no documented VNC API endpoint** (only bare-metal
+    does: `GET /v2/bare-metals/{id}/vnc`) — console access can't be scripted into
+    `run-scan.yml` and stays a manual, dashboard-only (my.vultr.com), HITL step no
+    matter what.
+
+## Just done (prior session — an incident-response chain, not planned work)
 
 - **PR #62**: fixed SE-MG2 role assumption (`sts:TagSession` denied by the trust policy) —
   the original Task 5 blocker from the prior session.
@@ -59,22 +101,25 @@ end-to-end and is the next diagnostic step.
 
 ## Next
 
-- **HITL Gate: OPEN — the next action needs the operator's own terminal.** A coder has no
-  SSH client access or Vultr credentials locally; this cannot be done unattended.
-- **SSH into a scan VM and find the real root cause.** One VM (label
-  `bounty-scanner-30092621282-1`) may still be live from the pre-#71 attempt — check
-  whether it's still up and reachable before dispatching a fresh one. Otherwise: dispatch
-  `run-scan.yml` with `target_domain=scanme.nmap.org`, `program=SANDBOX-NMAP`,
-  `image_tag=324b3fee8eb7aa168f812229efb60fa0c4045086` (or a newer `main` sha if `src/`
-  has changed since), `enable_ssh_debug=true`, then SSH in as soon as "Create Vultr scan
-  VM" completes (instance label is `bounty-scanner-<github.run_id>-1`, region `ewr`).
-  Check: does `apt-get`/`docker` actually run at all, does the container start, can the VM
-  reach S3/GHCR over the network, and `/var/log/cloud-init-output.log` for anything cloud-init
-  itself logged before the script even ran.
-- **Do not ship another speculative fix without live findings first.** Four rounds of
-  blind code-review-driven fixes already happened this session (PRs #64–#66, plus #69–#71
-  for the SSH tooling itself) — real bugs each time, but none of them were *the* bug that
-  actually blocks the scan from completing. Get inside the VM before touching code again.
+- **HITL Gate: OPEN — the next action needs the operator's own terminal/Vultr dashboard.**
+  A coder has no SSH, Vultr console, or Vultr API credentials locally; this cannot be done
+  unattended.
+- **SSH debug's firewall rule and the SSH agent are both CLOSED leads — do not
+  re-investigate either.** Both were directly verified correct this session (see above).
+  Re-litigating them would waste the next live-debug window.
+- **Get eyes on the VM's actual boot state via Vultr's web console (my.vultr.com) —
+  `enable_ssh_debug` is not required for this, console access needs no ingress rule.**
+  Dispatch a fresh run, open the instance's console tab, and if it says "Failed to
+  connect to server": do **not** click the noVNC `Connect` button (confirmed
+  documented-broken for Vultr) — click **`Restart Server`** inside the console view
+  instead. That should show the actual boot sequence directly, independent of network
+  reachability entirely. If it still won't connect: ping the IP, run an MTR report, open
+  a Vultr support ticket with both. Do not propose adding VNC software to the VM or
+  container — confirmed this needs nothing inside the guest.
+- **Do not ship another speculative fix without live findings first.** This is now the
+  second session where live access work (not code) was the actual constraint — the prior
+  session's PRs #64–#66 and #69–#71 each fixed a real bug but none was *the* bug. Get
+  inside the VM (via console, not SSH) before touching code again.
 - Once the real cause is found and fixed, re-confirm the full live-proof DoD: VM boots,
   scan runs, findings land in S3 from the Vultr IP, status sentinel drives a clean exit,
   instance destroyed — against the REAL target (`ztna.myngc.com` / `DIB-VDP`), not just the
