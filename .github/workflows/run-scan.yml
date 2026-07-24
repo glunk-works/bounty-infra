@@ -343,9 +343,14 @@ jobs:
           else
             aws s3api get-object --bucket "$FINDINGS_BUCKET_NAME" --key "$KEY" /tmp/status.json >/dev/null
             EXIT_CODE=$(jq -r '.exit_code' /tmp/status.json)
+            # `stage` is new (infra/scan-vm-userdata.sh.tftpl): a sentinel
+            # written before docker even ran carries which VM-bootstrap step
+            # produced it -- not target-derived, safe to log directly
+            # (BI-D4). Absent on any sentinel written by an older image.
+            STAGE=$(jq -r '.stage // "unknown"' /tmp/status.json)
             rm -f /tmp/status.json
             echo "SCAN_EXIT_CODE=${EXIT_CODE}" >> "$GITHUB_ENV"
-            echo "Scan exited with code: ${EXIT_CODE}"
+            echo "Scan exited with code: ${EXIT_CODE} (stage: ${STAGE})"
           fi
 
       - name: Destroy Vultr scan VM
