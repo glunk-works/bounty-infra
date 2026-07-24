@@ -4,10 +4,7 @@ set -uo pipefail
 # sentinel write at the bottom, on every exit path -- a `set -e` script
 # dies silently at the first failing command (apt-get, docker install,
 # docker run) and the poll step then sees nothing but a timeout,
-# indistinguishable from the VM never having booted at all (confirmed
-# live: SE Task 5, two straight dispatches -- one against a real target,
-# one against trivial scanme.nmap.org -- with zero diagnostic signal
-# either way). Every fallible command below is guarded explicitly instead.
+# indistinguishable from the VM never having booted at all.
 
 # SE (BI-D5) per-scan VM entrypoint. This is a committed template, not a Tofu
 # resource -- run-scan.yml renders it with `envsubst` at instance-create time
@@ -21,14 +18,31 @@ export AWS_SECRET_ACCESS_KEY="${aws_secret_access_key}"
 export AWS_SESSION_TOKEN="${aws_session_token}"
 export AWS_DEFAULT_REGION="${aws_region}"
 
+# Ubuntu 24.04's needrestart pops an interactive "which services should be
+# restarted?" prompt on any package install that touches a running service
+# -- docker.io always does. With no TTY (cloud-init/user-data has none)
+# that prompt just blocks forever waiting for input that will never come.
+# DEBIAN_FRONTEND alone does not suppress needrestart's own prompt --
+# NEEDRESTART_MODE is the variable needrestart itself reads.
+export DEBIAN_FRONTEND=noninteractive
+export NEEDRESTART_MODE=a
+
 EXIT_CODE=0
 STAGE="docker-run"
 
-if ! apt-get update -y; then
-  EXIT_CODE=1
+# Every external command below is `timeout`-wrapped, not just error-code
+# checked: guarding against a command that FAILS isn't enough if the real
+# failure mode is a command that never RETURNS at all (confirmed live: SE
+# Task 5, two straight dispatches -- one against a real target, one against
+# trivial scanme.nmap.org -- ran silently past the outer poll deadline with
+# zero diagnostic signal either way, consistent with a hang rather than a
+# fast failure). An indefinite hang defeats an unconditional sentinel just
+# as completely as `set -e` dying silently did.
+if ! timeout 120 apt-get update -y; then
+  EXIT_CODE=$?
   STAGE="apt-get-update"
-elif ! apt-get install -y --no-install-recommends docker.io awscli; then
-  EXIT_CODE=1
+elif ! timeout 180 apt-get install -y --no-install-recommends docker.io awscli; then
+  EXIT_CODE=$?
   STAGE="apt-get-install"
 else
   # `docker run` does not inherit the host shell's environment -- the retired
@@ -36,8 +50,11 @@ else
   # `environment` block + the ECS credential endpoint; here that same handoff
   # has to be explicit `-e` flags, or scanner.py's boto3 client has nothing
   # and its own RoE-load fatal check (no $S3_BUCKET_NAME) kills the scan
-  # before it starts.
-  docker run --rm \
+  # before it starts. Timeout budget is `scan_timeout` (the recon pipeline's
+  # own shared wall-clock budget -- see scanner.py's run_recon_pipeline)
+  # plus headroom for the image pull, triage, and S3 upload that happen
+  # outside that budget.
+  timeout $(( ${scan_timeout} + 180 )) docker run --rm \
     -e AWS_ACCESS_KEY_ID \
     -e AWS_SECRET_ACCESS_KEY \
     -e AWS_SESSION_TOKEN \
