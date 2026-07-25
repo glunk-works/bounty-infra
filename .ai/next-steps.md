@@ -6,76 +6,66 @@ Regenerate this at the end of every working session.
 
 ## Now
 
-**Egress migration (`SE`, BI-D5) — DONE.** Both phases merged, applied, and live-verified.
-No sprint currently in flight; the next session should plan which sprint comes next.
+**S1 (scanner security core) is the next sprint, and it's UNBLOCKED** — `planning`. Its
+only prerequisite, **SC (`scope-core` extraction), is DONE and deep-verified**. S1's plan
+already exists (`sprints/S1_scanner_security_core/sprint_plan.md`, authored 2026-07-22), so
+the next pass is **review-and-adopt**, not from-scratch planning.
 
-## Just done (this session — SE Phase 2: the AWS Fargate teardown)
+## Just done (this session)
 
-- **PR #78**: deleted the AWS Fargate estate from `infra/` (VPC/IGW/subnet/route/RTA/SG,
-  ECS cluster/task-def, ECR repo, CloudWatch log group, both Fargate IAM roles + policies),
-  dropped the four dead `outputs.tf` entries + `image_tag`, and rewrote
-  `README.md`/`CLAUDE.md`/`docs/hardening_roadmap.md` for the Vultr-only reality. Closed
-  **#11** (its task role no longer exists; SE-MG2's STS session policy is the replacement).
-- **Ran `/critic-gate`** (architect + security-critic + docs-consistency) on that diff
-  before merge — the only critic look it got (`review.ci_gate: null`):
-  - **architect** caught a real high-severity defect: deleting `required_providers.aws` +
-    `provider "aws"` in the same PR that needs to destroy AWS resources still in real
-    state would break the destroy (Tofu needs the provider config present to plan/execute
-    it). Fixed — kept the provider block, with a comment explaining why; follow-up to
-    remove it once state is confirmed clean is **#79**.
-  - **docs-consistency** found and fixed 3 stale references (README's workflow display
-    name, a present-tense #11 mention, a phantom step name in CLAUDE.md).
-  - **security-critic**: clean.
-- **PR #78's `tofu-plan` hit a transient GitHub platform error** (0 jobs scheduled, twice)
-  — `gh run rerun` resolved it; the real plan then correctly showed destroys-only.
-- **The merge-time apply failed for a genuine reason**: `github-actions-bounty-infra`'s
-  IAM policy (in `glunk-works/global-bootstrap`) never had
-  `ec2:DescribeNetworkInterfaces`/`DeleteNetworkInterface` — nothing had ever *destroyed*
-  this VPC/subnet/SG before (only ever created), so the gap was never exercised. Shipped
-  **global-bootstrap PR #4** (scoped, `tofu validate`d, GPG-signed) to add the two missing
-  actions to the existing `bounty_infra_policy` statement — no new role, no widened trust.
-  Operator merged + applied it; the re-run apply then succeeded cleanly (verified via the
-  GitHub Actions API).
-- **tflint** (part of the required `tofu-validate` check, not in this repo's local green
-  gate) failed on `findings_bucket_name`/`kms_key_arn` going unused once their last
-  consumer (`aws_iam_policy.s3_write_policy`) was deleted — but both must stay *declared*
-  because `plan-infra.yml`/`deploy-infra.yml` still pass them via `-var=`, and this
-  OpenTofu version hard-errors on `-var` for an undeclared root variable (verified by a
-  local test, not assumed). Fixed with `tflint-ignore` directives + an explaining comment,
-  not by removing the variables.
+- **Archived SE** via `/archive-sprint` (both phases merged/applied/live-verified; final
+  cursor snapshot at `.ai/archive/SE-next-steps.md`).
+- **Discovered SC was already done** — it had been executed 2026-07-22 in the other two
+  repos but never recorded here. **Deep-verified it (2026-07-25):**
+  - `glunk-works/scope-core` (public) holds `scope_core/{rules,validate,sanitize}.py`, the
+    four ported tests, a re-aimed import-boundary guard, and a live ruleset.
+  - loop-orchestrator **deleted its local copies** and depends on scope-core via a PEP 508
+    tarball direct-reference — merged as loop-orchestrator **#182**.
+  - Shipped logic is **byte-identical** to the loop-orchestrator originals modulo import
+    paths; the three security invariants hold (**fail-closed deny-wins**, **`re.search`
+    unanchored**, **stdlib+pydantic import guard**, the last even unit-tests its own
+    RED-ability); version floors correct; and the non-PyPI tarball dep **clears
+    `dependency-audit`/`sbom` in real CI** (the SC plan's biggest flagged risk — did not
+    materialize).
+- **Recorded SC DONE** in `docs/hardening_roadmap.md` (sprint-table row, ordering note,
+  BI-D6 realized-marker) and reseeded the cursor toward S1 — folded into **PR #81**.
+- **Verified Dependabot PR #67** (github-actions group bump) all-green and merge-ready.
 
-## Next
+## Next — review-and-adopt S1, then implement
 
-- **Run `/archive-sprint` for SE** — complete, no open HITL gate, fully committed/applied.
-- **Then hold an architect planning pass to pick the next sprint.** Do not assume ordering
-  from memory — re-check `sprints/*/sprint_plan.md` and each issue's live state:
-  - **S1** (scanner security core) — #7 already closed; **#13** (prompt-injection
-    hardening) and **#32** (traffic attribution/rate limiting) still open.
-  - **S2** (scanner robustness) — **#12** (pin tools/deps) and **#14** (partial/failed-scan
-    detection) still open; #11 no longer belongs to it (closed via SE).
-  - **SC** (scope-core extraction) — BI-D6 says this is a *prerequisite* for S1.
-  - **SG** (CI gate expansion) — the four substrate-independent gates
-    (`dependency-audit`/`sbom`/`secrets-scan`/`zizmor`) are already required per
-    `.ai/project.yml`'s ruleset; only the two AWS/infra-dependent gates (IaC security scan,
-    container image scan) may remain, and BI-D5's ordering note says those should follow
-    SE — which just finished. Confirm what's actually left before scoping it.
-- **Recon-coverage gap** (issue #76) — queued, not urgent, S1/S2 scope.
-- **Issue #79** — once a fresh `tofu plan` on `main` confirms zero AWS resources remain in
-  state, drop `infra/main.tf`'s now-vestigial `provider "aws"` block and `var.aws_region`
-  (and the matching workflow `-var=` flag). Small and mechanical; not urgent.
+Hold an **architect pass** (Opus) over the existing S1 plan:
+
+- **Confirm scope against live issue state:** #7 (reported CLOSED — re-confirm), **#13**
+  (prompt-injection into Gemini triage, OPEN), **#32** (traffic attribution + rate limiting,
+  OPEN).
+- **S1 mounts scope-core's structural check at three points** — input gate, discovered-set
+  filter, pre-nuclei revalidation (BI-D7) — over an S3-hosted HackerOne-vocabulary RoE
+  (BI-D8/D9), plus triage-prompt hardening and scanner traffic attribution/rate limiting.
+- **S1 Task 1 = "add the scope-core dependency"** — re-run the scratch-venv
+  `pip-audit`/`cyclonedx` smoke test the SC plan specifies before merging it. It passed in
+  loop-orchestrator, but bounty-infra is a *new* consumer with its own gate config.
+
+## Awaiting your merge (human-merges bar)
+
+- **PR #67** — Dependabot github-actions group bump; all 8 required checks green.
+  `gh pr merge 67 --squash --delete-branch`
+- **PR #81** — archive SE + record SC done (docs-only).
+
+## Open follow-ups (not sprint-gating)
+
+- **#79** — drop `infra/`'s vestigial `provider "aws"` block + `var.aws_region` once a fresh
+  `tofu plan` on `main` confirms zero AWS resources remain in state.
+- **#76** — subfinder ~30/37 sources dark (no API keys). S1/S2 scope.
 
 ## Still-open operator gates (a coder cannot do these)
 
-- **Reserved IP** — provision only when onboarding a program that mandates
-  source-IP registration (MG5): flip `reserved_ip_enabled`, apply, register, dispatch
-  with `use_reserved_ip=true`.
+- **Reserved IP** (MG5) — provision only when onboarding a program mandating source-IP
+  registration.
 - **Proactive abuse-team notification to Vultr** (BI-D5) — not yet done.
 
 ## Pointers
 
-- `docs/hardening_roadmap.md` — reference of record + threat model; SE's row now reads DONE.
-- `sprints/SE_egress_migration/sprint_plan.md` — the approved, now fully-executed SE plan.
-- PRs this session: bounty-infra [#78](https://github.com/glunk-works/bounty-infra/pull/78),
-  global-bootstrap [#4](https://github.com/glunk-works/global-bootstrap/pull/4).
-- Issues: [#79](https://github.com/glunk-works/bounty-infra/issues/79) (provider-block
-  cleanup), [#76](https://github.com/glunk-works/bounty-infra/issues/76) (recon coverage).
+- `docs/hardening_roadmap.md` — reference of record + threat model; SC and SE rows now DONE.
+- `sprints/S1_scanner_security_core/sprint_plan.md` — the S1 plan to review-and-adopt.
+- `sprints/SC_scope_core_extraction/sprint_plan.md` — the (now-executed) SC plan.
+- SE archive: `.ai/archive/SE-next-steps.md`.
