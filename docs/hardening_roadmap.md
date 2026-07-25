@@ -18,7 +18,7 @@ make it private; it is the set of invariants that make "public" safe. Verified 2
 `.tf`/`.yml`/`.py`/`.toml`/`.md` contain **no** account IDs, ARNs, bucket names, or identity
 IDs — every account-specific value resolves at runtime through Infisical (`env.TF_STATE_BUCKET`,
 `env.AWS_OIDC_ROLE_ARN`, `vars.IDENTITY_ID`) or tofu variables. The only committed literal is
-the ECR repo name `glunk-works/bounty-scanner`, which is inert.
+the image name `glunk-works/bounty-scanner` (GHCR since SE; previously ECR), which is inert.
 
 **Where each class of sensitive material lives:**
 
@@ -60,9 +60,9 @@ the wrapper (loop-orchestrator S47-D12; comments on #7/#13).
 | **S0 — Governance & CI/CD hardening** | #6, #8, #9, #10 | Branch-protection ruleset + minimal working method; gated OpenTofu deploy (plan-on-PR + apply-on-merge, `production` Environment approval); non-bypassable CI on all paths; `run-scan.yml` injection fix + drop unused `GITHUB_TOKEN`. **Also unblocks loop-orchestrator S47's #18** (same file as #6). |
 | **SC — `scope-core` extraction** (BI-D6) | new | **Prerequisite for S1.** Extract loop-orchestrator's scope validator + ingestion sanitizer into `glunk-works/scope-core` and re-point loop-orchestrator at it (deleting its local copies). Cross-repo; touches no bounty-infra `src/`. Cheapest now — those primitives still have zero live consumers. `sprints/SC_scope_core_extraction/sprint_plan.md`. |
 | **S1 — Scanner security core** | #7, #13, **#32** | Structural scope check **consumed from `scope-core`** (BI-D6), enforced at **three** points — input gate, discovered-set filter, pre-nuclei revalidation (BI-D7) — over a HackerOne-vocabulary RoE fetched from S3 (BI-D8/D9); triage-prompt hardening (fence + sanitize target-derived fields; triage advisory-only); scanner traffic attribution + rate limiting. **#32 joins S1** — it lands on the same `run_recon_pipeline` argv the scope filter is inserted into, and is thematically one change with #7. Planned 2026-07-22: `sprints/S1_scanner_security_core/sprint_plan.md`. |
-| **S2 — Scanner robustness** | #11, #12, #14 | Tighten task-role IAM to what's used; pin tools/templates/deps (reproducible builds); distinguish partial/failed scans from clean success. **#11 is re-scoped by BI-D5** — the Fargate task role it targets is being retired; re-point at the replacement credential path. |
+| **S2 — Scanner robustness** | #12, #14 | Pin tools/templates/deps (reproducible builds); distinguish partial/failed scans from clean success. **#11 closed by SE** — the Fargate task role it targeted no longer exists; the STS session policy SE-MG2 introduced (per-scan, per-domain-scoped, no standing role) is the least-privilege replacement. |
 | **SG — CI gate expansion** | new | Adopt the four shared gates (`secrets-scan`/gitleaks, `dependency-audit`, `sbom`, `pr-title`) + **`zizmor`** (workflow security — detects the template-injection class that was #6, converting T4's fix from done-once into can't-regress) + container image scan (trivy/grype) + IaC security scan (checkov/trivy-config; `tflint` lints, it does not scan). |
-| **SE — Egress migration (BI-D5)** | new | Retire ECS/VPC/ECR from `infra/**`; per-scan ephemeral VM on Vultr with a reserved IP; re-point `run-scan.yml` at the new launcher; credential path for S3 write; provider abuse-team notification. |
+| **SE — Egress migration (BI-D5)** — **DONE** | closes #11 | Retire ECS/VPC/ECR from `infra/**`; per-scan ephemeral VM on Vultr with a reserved IP; re-point `run-scan.yml` at the new launcher; credential path for S3 write; provider abuse-team notification. Phase 1 (stand-up + live proof) and Phase 2 (AWS Fargate teardown) both merged; `sprints/SE_egress_migration/sprint_plan.md` has the full record. |
 | **SW — Way of working** (BI-D10..D13) | **#19** | Extract loop-orchestrator's Claude Code workflow layer (7 skills, 4 portable agents, the SessionStart cursor hook, the Global Conventions) into a **plugin** published from a new `glunk-works/claude-workbench`, parameterized by a per-repo `.ai/project.yml`; adopt here first. **Retires BI-D3** — the plugin repo *is* the central conventions home. Independent of every other sprint; touches no `src/`, `infra/`, or workflow. `sprints/SW_way_of_working/sprint_plan.md`. |
 
 **#6 severity is anticipatory, not live (qualifier added 2026-07-21).** `workflow_dispatch`
@@ -82,7 +82,8 @@ its seven gates — `secrets-scan`, `dependency-audit`, `sbom`, `pr-title`, `ziz
 neither `infra/**` nor the runtime, so they can land **immediately and in parallel** with
 anything else. The remaining two should follow **SE**: an IaC security scan run now would spend
 its findings on ECS/VPC resources BI-D5 deletes, and the image scan wants to target whatever
-registry SE settles on. **SE before S2**, since S2's #11 targets a role SE retires. **S1 is
+registry SE settles on. **SE before S2 held**, since S2's #11 targeted a role SE retired
+(closed as part of SE, not carried into S2). **S1 is
 independent of both** and can be sequenced on its own merits — but as of 2026-07-22 it has a
 prerequisite of its own: **SC before S1** (BI-D6), since S1's first task is "add the
 `scope-core` dependency."
@@ -174,16 +175,19 @@ procedural controls in BI-D5.
 
 ### Consequences for the existing sprints
 
-- **S2's #11 (tighten task-role IAM) largely evaporates** — `aws_iam_role.task_role` and
-  `execution_role` are Fargate constructs BI-D5 retires. Re-scope #11 to the *replacement*
-  credential path (short-lived S3-write creds delivered to the VM) when S3 lands.
+- **S2's #11 (tighten task-role IAM) closed, not carried forward** — `aws_iam_role.task_role`
+  and `execution_role` were Fargate constructs; SE Phase 2 deleted them outright, and Phase 1's
+  STS session policy (SE-MG2: per-scan, per-domain-scoped, no standing role) is the
+  least-privilege replacement #11 asked for. There is no longer a standing task role for S2 to
+  tighten.
 - **S1 is unaffected.** #7 (scope enforcement) and #13 (prompt injection) are scanner-internal
   and provider-agnostic — they survive the substrate change intact.
 - **T3(d)'s image-rollout mechanism is replaced, its principle is not.** Sha-pinned, CI-gated,
-  never `:latest` carries over to whatever registry the VM pulls from.
+  never `:latest` carries over to GHCR, the registry the VM now pulls from.
 
-*(Docs-drift symptom still outstanding: the README lists a `build-and-push.yml` that does not
-exist and claims "least privilege IAM" that #11 contradicts — fold into a docs pass.)*
+*(Docs-drift symptom resolved in SE's Phase-2 docs pass: the README's phantom
+`build-and-push.yml` is corrected to `build-image.yml`, and its IAM claim now describes the
+STS session-policy reality instead of the retired always-on task role.)*
 
 ## Locked decisions (this planning pass, 2026-07-21, owner-confirmed via micro-gates)
 
@@ -415,8 +419,9 @@ Full reasoning and the task breakdown: `sprints/SW_way_of_working/sprint_plan.md
 - **loop-orchestrator #18** (recon dispatch contract) lands `seed`/`token` inputs in
   `run-scan.yml` — **must ride S0's #6 fix** (env+jq, no inline `${{ }}`). So S0 unblocks
   S47's live V-run.
-- **kms:Decrypt:** #11 tightens the *scanner task role*; loop-orchestrator's fetch uses a
-  *different* OIDC role that needs its own `kms:Decrypt` — no conflict (distinct principals).
+- **kms:Decrypt:** the scanner's per-scan STS session policy (the closed #11's replacement)
+  grants it on the *scoped scan-writer session*; loop-orchestrator's fetch uses a *different*
+  OIDC role that needs its own `kms:Decrypt` — no conflict (distinct principals).
 - **SW extracts loop-orchestrator's workflow layer** into `glunk-works/claude-workbench`
   (BI-D10). Its skills/agents are the *source*, but SW does **not** modify that repo — it keeps
   its working local copies until it adopts the plugin in its own later sprint (BI-D13).

@@ -3,26 +3,23 @@ variable "aws_region" {
   default = "us-east-1"
 }
 
+# No resource in this config consumes these two anymore (SE Phase 2 deleted
+# the last consumer, aws_iam_policy.s3_write_policy), but
+# plan-infra.yml/deploy-infra.yml still pass them via -var=, and OpenTofu
+# hard-errors ("Value for undeclared variable") on a -var for a variable the
+# root module doesn't declare -- so removing the declaration would break both
+# workflows, not just go unused. Drop these (and the matching -var= flags)
+# once nothing needs the pass-through.
+# tflint-ignore: terraform_unused_declarations
 variable "findings_bucket_name" {
   type        = string
   description = "Name of the S3 findings bucket provisioned during bootstrap"
 }
 
+# tflint-ignore: terraform_unused_declarations
 variable "kms_key_arn" {
   type        = string
   description = "ARN of the KMS key provisioned during bootstrap"
-}
-
-variable "image_tag" {
-  type        = string
-  default     = "latest"
-  description = <<-EOT
-    Bootstrap-only. Sets the container image tag on the FIRST apply that
-    creates the task definition. After that, `build-image.yml` owns image
-    deploys directly against ECS (sha-pinned, immutable tags) and the task
-    definition's `lifecycle.ignore_changes` means Tofu never reverts them —
-    see the comment on aws_ecs_task_definition.scanner_task in main.tf.
-  EOT
 }
 
 variable "vultr_api_key" {

@@ -8,23 +8,33 @@ demand. **Where we are right now** lives in `.ai/next-steps.md`.
 
 ## What this is
 
-bounty-infra is an **AWS bug-bounty reconnaissance pipeline**: a `workflow_dispatch`
-launches a Fargate task (`.github/workflows/run-scan.yml`) running the `bounty_scanner`
-Python package, which shells `subfinder`/`httpx`/`nuclei` (baked into `src/Dockerfile`,
-multi-stage Go builder), triages findings through Gemini, and writes results to S3.
-OpenTofu in `infra/` owns the cluster, ECR repo, task definition, IAM, and networking.
-Zero ingress; every account-specific value resolves at runtime through Infisical
-(`env.AWS_OIDC_ROLE_ARN`, `env.TF_STATE_BUCKET`, `vars.IDENTITY_ID`) or tofu variables.
+bounty-infra is a bug-bounty reconnaissance pipeline: a `workflow_dispatch`
+(`.github/workflows/run-scan.yml`) assumes a scoped OIDC/STS session, boots a **per-scan
+ephemeral Vultr VM** from cloud-init, and runs the `bounty_scanner` Python package —
+which shells `subfinder`/`httpx`/`nuclei` (baked into `src/Dockerfile`, multi-stage Go
+builder), triages findings through Gemini, and writes results to S3 — before destroying
+the VM. The image is built by `build-image.yml` and pushed **public, sha-pinned** to
+GHCR (`ghcr.io/glunk-works/bounty-scanner:<sha>`, no `:latest`); the VM pulls it with no
+credential. AWS keeps the control plane only: the S3 findings bucket + KMS key, the
+OpenTofu state backend, and every GitHub OIDC role (`global-bootstrap`) — including the
+`bounty-scanner-s3-writer` role `run-scan.yml` assumes-into for a short-lived,
+per-domain-scoped S3-write session (SE-MG2; the writer role and its trust policy live in
+`global-bootstrap`, not here). OpenTofu in `infra/` now owns only the Vultr firewall group
+and an optional, off-by-default reserved IP (SE-MG5) — the AWS VPC/ECS/ECR half is fully
+retired. Zero ingress on the scan VM; every account-specific value resolves at runtime
+through Infisical (`env.AWS_OIDC_ROLE_ARN`, `env.TF_STATE_BUCKET`, `vars.IDENTITY_ID`,
+`VULTR_API_KEY`) or tofu variables.
 
 > **This repo is under active hardening — read the roadmap before extending it.**
 > [`docs/hardening_roadmap.md`](docs/hardening_roadmap.md) is the reference of record:
 > the sprint sequence (S0 governance → S1 scanner security → S2 robustness, plus **SG** CI
 > gates and **SE** egress migration), and the locked decisions (**BI-D1..BI-D13**).
 >
-> **The compute-model question is RESOLVED as of 2026-07-21 (BI-D5):** scan egress leaves
-> AWS for per-scan ephemeral VMs on Vultr; AWS keeps the control plane (S3 findings + KMS,
-> tofu state, OIDC roles). The ECS/Fargate + VPC half of `infra/` is slated for retirement,
-> so **do not extend it** — read BI-D5 before touching `infra/main.tf`.
+> **The compute-model migration (BI-D5) is DONE as of SE Phase 2:** scan egress runs on
+> per-scan ephemeral Vultr VMs; AWS is control-plane only. Any new AWS compute/networking
+> resource in `infra/` would be reintroducing exactly what SE retired — read BI-D5 first,
+> and get a new role from `global-bootstrap` rather than widening
+> `bounty-scanner-s3-writer`'s trust or session-policy scope.
 
 ## The working method (owned elsewhere — do not restate it here)
 
@@ -53,8 +63,8 @@ the same name. Both rules, and why, are in the plugin's `reference/project-schem
 
 - **Never interpolate `${{ }}` inline into a `run:` block.** Pass values via `env:`, quote
   every expansion (`"$TARGET_DOMAIN"`), and build JSON with `jq -n --arg` — never string
-  concatenation. This was finding #6, fixed in S0-T4; `run-scan.yml`'s *Trigger Scan Task*
-  step is the in-house reference shape.
+  concatenation. This was finding #6, fixed in S0-T4; `run-scan.yml`'s *Generate RUN_ID and
+  scoped session policy* step is the in-house reference shape.
 - `set -euo pipefail` at the top of any non-trivial `run:` block.
 - Grant the **narrowest `permissions:`** that works and delete unused ones (#10: the
   scanner makes no GitHub API call, so `issues: write` and `GITHUB_TOKEN` do not belong).
