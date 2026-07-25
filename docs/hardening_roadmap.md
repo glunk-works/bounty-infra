@@ -58,7 +58,7 @@ the wrapper (loop-orchestrator S47-D12; comments on #7/#13).
 | Sprint | Closes | Scope |
 |---|---|---|
 | **S0 — Governance & CI/CD hardening** | #6, #8, #9, #10 | Branch-protection ruleset + minimal working method; gated OpenTofu deploy (plan-on-PR + apply-on-merge, `production` Environment approval); non-bypassable CI on all paths; `run-scan.yml` injection fix + drop unused `GITHUB_TOKEN`. **Also unblocks loop-orchestrator S47's #18** (same file as #6). |
-| **SC — `scope-core` extraction** (BI-D6) | new | **Prerequisite for S1.** Extract loop-orchestrator's scope validator + ingestion sanitizer into `glunk-works/scope-core` and re-point loop-orchestrator at it (deleting its local copies). Cross-repo; touches no bounty-infra `src/`. Cheapest now — those primitives still have zero live consumers. `sprints/SC_scope_core_extraction/sprint_plan.md`. |
+| **SC — `scope-core` extraction** (BI-D6) — **DONE** | new | **Was the prerequisite for S1.** Extracted loop-orchestrator's scope validator + ingestion sanitizer into `glunk-works/scope-core` (public) and re-pointed loop-orchestrator at it — local copies deleted — via loop-orchestrator [#182](https://github.com/glunk-works/loop-orchestrator/pull/182), 2026-07-22. Cross-repo; touched no bounty-infra `src/`. Verified 2026-07-25: shipped logic is byte-identical to the originals modulo import paths, the three security invariants hold, and the non-PyPI tarball dependency clears `dependency-audit`/`sbom` in real CI. `sprints/SC_scope_core_extraction/sprint_plan.md`. |
 | **S1 — Scanner security core** | #7, #13, **#32** | Structural scope check **consumed from `scope-core`** (BI-D6), enforced at **three** points — input gate, discovered-set filter, pre-nuclei revalidation (BI-D7) — over a HackerOne-vocabulary RoE fetched from S3 (BI-D8/D9); triage-prompt hardening (fence + sanitize target-derived fields; triage advisory-only); scanner traffic attribution + rate limiting. **#32 joins S1** — it lands on the same `run_recon_pipeline` argv the scope filter is inserted into, and is thematically one change with #7. Planned 2026-07-22: `sprints/S1_scanner_security_core/sprint_plan.md`. |
 | **S2 — Scanner robustness** | #12, #14 | Pin tools/templates/deps (reproducible builds); distinguish partial/failed scans from clean success. **#11 closed by SE** — the Fargate task role it targeted no longer exists; the STS session policy SE-MG2 introduced (per-scan, per-domain-scoped, no standing role) is the least-privilege replacement. |
 | **SG — CI gate expansion** | new | Adopt the four shared gates (`secrets-scan`/gitleaks, `dependency-audit`, `sbom`, `pr-title`) + **`zizmor`** (workflow security — detects the template-injection class that was #6, converting T4's fix from done-once into can't-regress) + container image scan (trivy/grype) + IaC security scan (checkov/trivy-config; `tflint` lints, it does not scan). |
@@ -84,9 +84,10 @@ anything else. The remaining two should follow **SE**: an IaC security scan run 
 its findings on ECS/VPC resources BI-D5 deletes, and the image scan wants to target whatever
 registry SE settles on. **SE before S2 held**, since S2's #11 targeted a role SE retired
 (closed as part of SE, not carried into S2). **S1 is
-independent of both** and can be sequenced on its own merits — but as of 2026-07-22 it has a
-prerequisite of its own: **SC before S1** (BI-D6), since S1's first task is "add the
-`scope-core` dependency."
+independent of both** and can be sequenced on its own merits. Its one prerequisite —
+**SC before S1** (BI-D6), since S1's first task is "add the `scope-core` dependency" —
+**is now satisfied: SC landed 2026-07-22** (loop-orchestrator #182, verified 2026-07-25),
+so **S1 is unblocked.**
 
 ## RESOLVED — the central conventions repo (BI-D3, superseded by BI-D10 on 2026-07-22)
 
@@ -245,8 +246,9 @@ STS session-policy reality instead of the retired always-on task role.)*
 ## Locked decisions (S1 planning pass, 2026-07-22, owner-confirmed via micro-gates)
 
 - **BI-D6 (2026-07-22) — shared code IS allowed, via a dedicated small package repo.**
+  **Realized 2026-07-22** (SC; loop-orchestrator [#182](https://github.com/glunk-works/loop-orchestrator/pull/182)).
   Supersedes BI-D3's "NOT a shared-code package" clause. loop-orchestrator's two security
-  primitives — the structural scope validator and the ingestion sanitizer — move to
+  primitives — the structural scope validator and the ingestion sanitizer — moved to
   **`glunk-works/scope-core`**, which both repos depend on; **neither product repo depends on
   the other**. Detail and the extraction plan: `sprints/SC_scope_core_extraction/sprint_plan.md`.
   - **The record was self-contradictory and BI-D3 was the wrong half.** loop-orchestrator's
