@@ -6,66 +6,67 @@ Regenerate this at the end of every working session.
 
 ## Now
 
-**S1 (scanner security core) is the next sprint, and it's UNBLOCKED** — `planning`. Its
-only prerequisite, **SC (`scope-core` extraction), is DONE and deep-verified**. S1's plan
-already exists (`sprints/S1_scanner_security_core/sprint_plan.md`, authored 2026-07-22), so
-the next pass is **review-and-adopt**, not from-scratch planning.
+**S2 (scanner robustness) is the active frontier** — `planning`. **No sprint plan exists yet**
+(`sprints/S2_scanner_robustness/` is unwritten), so the next pass is **from-scratch planning**,
+one question at a time, to its own HITL gate before any `src/` change. Adopt **Opus /
+architect**.
 
-## Just done (this session)
+## Just done (this session, 2026-07-25)
 
-- **Archived SE** via `/archive-sprint` (both phases merged/applied/live-verified; final
-  cursor snapshot at `.ai/archive/SE-next-steps.md`).
-- **Discovered SC was already done** — it had been executed 2026-07-22 in the other two
-  repos but never recorded here. **Deep-verified it (2026-07-25):**
-  - `glunk-works/scope-core` (public) holds `scope_core/{rules,validate,sanitize}.py`, the
-    four ported tests, a re-aimed import-boundary guard, and a live ruleset.
-  - loop-orchestrator **deleted its local copies** and depends on scope-core via a PEP 508
-    tarball direct-reference — merged as loop-orchestrator **#182**.
-  - Shipped logic is **byte-identical** to the loop-orchestrator originals modulo import
-    paths; the three security invariants hold (**fail-closed deny-wins**, **`re.search`
-    unanchored**, **stdlib+pydantic import guard**, the last even unit-tests its own
-    RED-ability); version floors correct; and the non-PyPI tarball dep **clears
-    `dependency-audit`/`sbom` in real CI** (the SC plan's biggest flagged risk — did not
-    materialize).
-- **Recorded SC DONE** in `docs/hardening_roadmap.md` (sprint-table row, ordering note,
-  BI-D6 realized-marker) and reseeded the cursor toward S1 — folded into **PR #81**.
-- **Verified Dependabot PR #67** (github-actions group bump) all-green and merge-ready.
+- **Caught and corrected a major cursor drift.** The cursor claimed S1 was `planning` /
+  "review-and-adopt then implement" — but **S1 was implemented and merged 2026-07-22** (PRs
+  #40/#41/#42) and its code has been live on `main` for weeks. A prior session (PR #81) had
+  re-pointed at S1 as if unstarted.
+- **Verified S1 DONE.** Full green gate — 73 behavioral tests (every rejection asserts
+  `subprocess.run` never ran), ruff + `bandit`, `tofu fmt`/`validate`. All five tasks meet
+  their acceptance criteria. Two accepted residuals noted (NFKC-reject hardening; un-sanitized
+  `severity` field) — neither a defect.
+- **Reconciled issues:** closed **#7** (already), **#13**, **#32** (backfilled its empty body
+  first). Filed deferreds **#82** (H1 RoE sync job) and **#83** (Bugcrowd hand-authored).
+  Filed **#84** — the S1 live-smoke gap the hermetic suite can't close.
+- **Recorded S1 DONE** in `docs/hardening_roadmap.md` (table row, ordering frontier, BI-D7
+  realized marker) and **archived** S1's true final cursor to `.ai/archive/S1-next-steps.md`.
+- **Advisories left draft** by decision (`GHSA-pf9q`/#7, `GHSA-p3hr`/#13, `GHSA-59j8`/S0).
 
-## Next — review-and-adopt S1, then implement
+## Next — plan S2 (from scratch)
 
-Hold an **architect pass** (Opus) over the existing S1 plan:
+Hold an **architect pass** (Opus) to design S2:
 
-- **Confirm scope against live issue state:** #7 (reported CLOSED — re-confirm), **#13**
-  (prompt-injection into Gemini triage, OPEN), **#32** (traffic attribution + rate limiting,
-  OPEN).
-- **S1 mounts scope-core's structural check at three points** — input gate, discovered-set
-  filter, pre-nuclei revalidation (BI-D7) — over an S3-hosted HackerOne-vocabulary RoE
-  (BI-D8/D9), plus triage-prompt hardening and scanner traffic attribution/rate limiting.
-- **S1 Task 1 = "add the scope-core dependency"** — re-run the scratch-venv
-  `pip-audit`/`cyclonedx` smoke test the SC plan specifies before merging it. It passed in
-  loop-orchestrator, but bounty-infra is a *new* consumer with its own gate config.
+- **#12** — non-reproducible builds: `@latest` tools + unpinned nuclei templates/deps. Pin
+  them. This is the constraint `CLAUDE.md` keeps citing ("do not add a `@latest` install while
+  #12 is open").
+- **#14** — pipeline reports success on partial/failed scans. Make the exit-code contract
+  distinguish **partial** (e.g. hosts dropped out-of-scope) from **clean**. S1 already
+  *records* the drop count (`scan_metadata.json`); #14 is about the exit code, not the data.
+- **Decide** whether the two S1 residuals fold into S2 or stay as-is.
+- **#11 does NOT belong to S2** — SE closed it (Fargate task role retired).
 
-## Awaiting your merge (human-merges bar)
+## ⚠ Uncommitted — commit this close-out
 
-- **PR #67** — Dependabot github-actions group bump; all 8 required checks green.
-  `gh pr merge 67 --squash --delete-branch`
-- **PR #81** — archive SE + record SC done (docs-only).
-
-## Open follow-ups (not sprint-gating)
-
-- **#79** — drop `infra/`'s vestigial `provider "aws"` block + `var.aws_region` once a fresh
-  `tofu plan` on `main` confirms zero AWS resources remain in state.
-- **#76** — subfinder ~30/37 sources dark (no API keys). S1/S2 scope.
+The archival edits are **not yet committed**: `docs/hardening_roadmap.md`, `.ai/state.json`,
+this file, and `.ai/archive/S1-next-steps.md` (archive is git-ignored). Commit them as a
+docs-only close-out PR (`/ship` or `/handoff`). `last_commit` in `state.json` is still the
+pre-archival HEAD `9a8fecc`.
 
 ## Still-open operator gates (a coder cannot do these)
 
-- **Reserved IP** (MG5) — provision only when onboarding a program mandating source-IP
-  registration.
-- **Proactive abuse-team notification to Vultr** (BI-D5) — not yet done.
+- **Author + upload a real RoE object** to `s3://<findings-bucket>/roe/<program>/scope.json`
+  (BI-D8/D9) — prerequisite for any real scan and for **#84**. Until it exists a fail-closed
+  scanner correctly refuses to scan.
+- **S1 live smoke (#84)** — real `workflow_dispatch`; expect first-run `AccessDenied` until
+  `global-bootstrap` applies the `s3:GetObject`+`kms:Decrypt` grant locally.
+- **Publish the draft advisories** — when the operator chooses to disclose.
+- **Reserved IP** (MG5) and **proactive Vultr abuse-team notification** (BI-D5).
+
+## Open follow-ups (not sprint-gating)
+
+- **#79** — drop `infra/`'s vestigial `provider "aws"` block once a fresh `tofu plan` confirms
+  zero AWS state. **#76** — subfinder sources dark. **#8** — lint/test CI bypassed on
+  push-to-main. **#10** — unused `GITHUB_TOKEN` in the scanner container.
 
 ## Pointers
 
-- `docs/hardening_roadmap.md` — reference of record + threat model; SC and SE rows now DONE.
-- `sprints/S1_scanner_security_core/sprint_plan.md` — the S1 plan to review-and-adopt.
-- `sprints/SC_scope_core_extraction/sprint_plan.md` — the (now-executed) SC plan.
-- SE archive: `.ai/archive/SE-next-steps.md`.
+- `docs/hardening_roadmap.md` — reference of record + threat model; SC/SE/**S1** now DONE.
+- `sprints/S2_scanner_robustness/sprint_plan.md` — **to be written.**
+- `sprints/S1_scanner_security_core/sprint_plan.md` — the (now-executed) S1 plan.
+- S1 archive: `.ai/archive/S1-next-steps.md`.
