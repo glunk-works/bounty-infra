@@ -57,6 +57,11 @@ class ReconArtifacts:
     # filters. Written to their own S3 artifact -- NEVER a log line (BI-D4).
     dropped_hosts: list[str] = field(default_factory=list)
     dropped_out_of_scope_count: int = 0
+    # M5: scan status -- 'success' on clean completion, 'partial' when any
+    # recon stage errored or timed out. main() exits non-zero on 'partial'
+    # so the workflow gate and the stored report reflect reality, not a
+    # silent partial-success.
+    scan_status: str = 'success'
 
 
 class Finding(BaseModel):
@@ -346,9 +351,11 @@ def run_recon_pipeline(
 
     except subprocess.TimeoutExpired as e:
         logger.error(f"Pipeline tool timed out after {e.timeout} seconds: {e.cmd}")
+        artifacts.scan_status = 'partial'
         yield artifacts  # Yield whatever was collected before the timeout
     except subprocess.CalledProcessError as e:
         logger.error(f"Pipeline tool failed during execution: {e}")
+        artifacts.scan_status = 'partial'
         yield artifacts  # Yield whatever was collected before the crash
 
     finally:
@@ -544,6 +551,7 @@ def upload_scan_metadata(
     synced_at: str,
     dropped_unknown_asset_type: int,
     dropped_out_of_scope_count: int,
+    scan_status: str = 'success',
 ) -> None:
     """Scan-run metadata as its OWN S3 artifact (S1 Task 3), never folded
     into `TriageReport` -- that model is Gemini's `response_schema`
@@ -561,6 +569,7 @@ def upload_scan_metadata(
         "roe_synced_at": synced_at,
         "dropped_unknown_asset_type": dropped_unknown_asset_type,
         "dropped_out_of_scope": dropped_out_of_scope_count,
+        "scan_status": scan_status,
     }
     try:
         s3.put_object(
@@ -706,7 +715,20 @@ def main():
             program_scope.synced_at,
             program_scope.dropped_unknown_asset_type,
             artifacts.dropped_out_of_scope_count,
+            artifacts.scan_status,
         )
+
+    # M5: a partial scan (any stage errored or timed out) must not be
+    # indistinguishable from a clean completion -- the container exits
+    # non-zero so run-scan.yml's "Fail on non-zero scan exit" gate
+    # fires, and the stored scan_metadata.json carries scan_status:
+    # "partial" for the record.  Uploads have already completed, so
+    # whatever findings were collected before the failure are preserved.
+    if artifacts.scan_status != 'success':
+        logger.error(
+            f"Scan completed with status '{artifacts.scan_status}' -- exiting non-zero."
+        )
+        sys.exit(1)
 
 
 if __name__ == "__main__":
