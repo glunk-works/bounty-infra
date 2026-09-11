@@ -1,72 +1,39 @@
 # Next steps — dev-workflow cursor
 
-Thin, live cursor for whoever picks up this repo next. Points into the deep record
-(`docs/hardening_roadmap.md`, the sprint plans, the issues) — it does not copy them.
-Regenerate this at the end of every working session.
+Thin, live cursor for whoever picks up this repo next. Points into the deep record — it does
+not copy it. Regenerate this at the end of every working session.
 
 ## Now
 
-**S2 (scanner robustness) is the active frontier** — `planning`. **No sprint plan exists yet**
-(`sprints/S2_scanner_robustness/` is unwritten), so the next pass is **from-scratch planning**,
-one question at a time, to its own HITL gate before any `src/` change. Adopt **Opus /
-architect**.
+**S3 — MVP thin slice is the active sprint.** Planned 2026-09-11, **due Wed 2026-09-16**.
+**The sprint plan is the GitHub milestone, not a local file (BI-D19):**
+https://github.com/glunk-works/bounty-infra/milestone/1 — work its open issues in number order
+(#98 upward). Decisions BI-D14..D20 are recorded by #100; until it merges, this file and the
+issue bodies are the record.
 
-## Just done (this session, 2026-07-25)
+Fallback line: if Tuesday looks bad, #118 (operator read path) and #119 (DefectDojo) drop
+first; the persona registry (#112), governance mapping (#115), runbooks (#116) and the live
+scan (#117) are the demo.
 
-- **Caught and corrected a major cursor drift.** The cursor claimed S1 was `planning` /
-  "review-and-adopt then implement" — but **S1 was implemented and merged 2026-07-22** (PRs
-  #40/#41/#42) and its code has been live on `main` for weeks. A prior session (PR #81) had
-  re-pointed at S1 as if unstarted.
-- **Verified S1 DONE.** Full green gate — 73 behavioral tests (every rejection asserts
-  `subprocess.run` never ran), ruff + `bandit`, `tofu fmt`/`validate`. All five tasks meet
-  their acceptance criteria. Two accepted residuals noted (NFKC-reject hardening; un-sanitized
-  `severity` field) — neither a defect.
-- **Reconciled issues:** closed **#7** (already), **#13**, **#32** (backfilled its empty body
-  first). Filed deferreds **#82** (H1 RoE sync job) and **#83** (Bugcrowd hand-authored).
-  Filed **#84** — the S1 live-smoke gap the hermetic suite can't close.
-- **Recorded S1 DONE** in `docs/hardening_roadmap.md` (table row, ordering frontier, BI-D7
-  realized marker) and **archived** S1's true final cursor to `.ai/archive/S1-next-steps.md`.
-- **Advisories left draft** by decision (`GHSA-pf9q`/#7, `GHSA-p3hr`/#13, `GHSA-59j8`/S0).
+## Just done (2026-09-11)
 
-## Next — plan S2 (from scratch)
-
-Hold an **architect pass** (Opus) to design S2:
-
-- **#12** — non-reproducible builds: `@latest` tools + unpinned nuclei templates/deps. Pin
-  them. This is the constraint `CLAUDE.md` keeps citing ("do not add a `@latest` install while
-  #12 is open").
-- **#14** — pipeline reports success on partial/failed scans. Make the exit-code contract
-  distinguish **partial** (e.g. hosts dropped out-of-scope) from **clean**. S1 already
-  *records* the drop count (`scan_metadata.json`); #14 is about the exit code, not the data.
-- **Decide** whether the two S1 residuals fold into S2 or stay as-is.
-- **#11 does NOT belong to S2** — SE closed it (Fargate task role retired).
-
-## ⚠ Uncommitted — commit this close-out
-
-The archival edits are **not yet committed**: `docs/hardening_roadmap.md`, `.ai/state.json`,
-this file, and `.ai/archive/S1-next-steps.md` (archive is git-ignored). Commit them as a
-docs-only close-out PR (`/ship` or `/handoff`). `last_commit` in `state.json` is still the
-pre-archival HEAD `9a8fecc`.
+- Verified build status: local green gate and CI on `main` both green; PR #97 merged.
+- Planning pass, one question at a time, then a self-critique that changed four design points
+  (GitHub Environment approval instead of Slack reaction polling; IAM grants verified day one;
+  personas repo-local, not in the plugin; loop-orchestrator-vs-SDK left as a spike).
+- Created milestones S3, S4, S5, SG, S6, S7 and issues #98–#151; attached the older open
+  issues (#8 #10 #12 #14 #18 #76 #79 #82 #83 #84 #86 #87 #92) to milestones. S2 is dissolved
+  into S3/SG.
+- Cross-repo issues: global-bootstrap #13–#16 (grants, roles, Object Lock), claude-workbench
+  #86 (`planning:` schema key), loop-orchestrator #204 and scope-core #3 (repo hygiene).
 
 ## Still-open operator gates (a coder cannot do these)
 
-- **Author + upload a real RoE object** to `s3://<findings-bucket>/roe/<program>/scope.json`
-  (BI-D8/D9) — prerequisite for any real scan and for **#84**. Until it exists a fail-closed
-  scanner correctly refuses to scan.
-- **S1 live smoke (#84)** — real `workflow_dispatch`; expect first-run `AccessDenied` until
-  `global-bootstrap` applies the `s3:GetObject`+`kms:Decrypt` grant locally.
-- **Publish the draft advisories** — when the operator chooses to disclose.
-- **Reserved IP** (MG5) and **proactive Vultr abuse-team notification** (BI-D5).
-
-## Open follow-ups (not sprint-gating)
-
-- **#79** — drop `infra/`'s vestigial `provider "aws"` block once a fresh `tofu plan` confirms
-  zero AWS state. **#76** — subfinder sources dark. **#8** — lint/test CI bypassed on
-  push-to-main. **#10** — unused `GITHUB_TOKEN` in the scanner container.
+- #102 HackerOne API token into Infisical · #101 verification dispatch · #117 first live scan ·
+  global-bootstrap #13 applied locally before #103 can run for real.
 
 ## Pointers
 
-- `docs/hardening_roadmap.md` — reference of record + threat model; SC/SE/**S1** now DONE.
-- `sprints/S2_scanner_robustness/sprint_plan.md` — **to be written.**
-- `sprints/S1_scanner_security_core/sprint_plan.md` — the (now-executed) S1 plan.
-- S1 archive: `.ai/archive/S1-next-steps.md`.
+- Milestones: https://github.com/glunk-works/bounty-infra/milestones
+- `docs/hardening_roadmap.md` — decisions BI-D1..D13 (D14..D20 land via #100).
+- `sprints/*/sprint_plan.md` — historical (S0–SW). No S2/S3 plan file exists by design.
