@@ -19,7 +19,7 @@
       "source": {
         "source": "github",
         "repo": "glunk-works/claude-workbench",
-        "ref": "v0.7.0"
+        "ref": "v0.10.0"
       }
     }
   }
