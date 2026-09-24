@@ -319,6 +319,7 @@ def test_run_recon_pipeline_subprocess_error(mocker):
 
     with run_recon_pipeline("example.com", PERMISSIVE_RULES, TEST_UA, {}) as artifacts:
         assert artifacts.findings == []
+        assert artifacts.scan_status == 'partial'
 
 
 def test_run_recon_pipeline_subprocess_timeout(mocker):
@@ -329,6 +330,7 @@ def test_run_recon_pipeline_subprocess_timeout(mocker):
 
     with run_recon_pipeline("example.com", PERMISSIVE_RULES, TEST_UA, {}) as artifacts:
         assert artifacts.findings == []
+        assert artifacts.scan_status == 'partial'
 
 
 def test_run_recon_pipeline_timeout_is_one_shared_budget_not_per_tool(mocker):
@@ -391,6 +393,28 @@ def test_run_recon_pipeline_nuclei_severity_flag_still_applied(mocker):
 
     nuclei_argv = next(c[0] for c in calls_seen if c[0][0] == "nuclei")
     assert "-s" in nuclei_argv and TEST_SEVERITIES_STR in nuclei_argv
+
+
+def test_run_recon_pipeline_clean_scan_has_success_status(mocker):
+    """M5: a scan where no stage errors or times out must report
+    scan_status='success'."""
+    calls_seen: list = []
+    mocker.patch(
+        "bounty_scanner.scanner.subprocess.run",
+        side_effect=_make_subprocess_side_effect(
+            calls_seen,
+            {
+                "subfinder": ["example.com"],
+                "httpx": ["https://example.com"],
+                "nuclei": [],
+            },
+        ),
+    )
+
+    with run_recon_pipeline(
+        "example.com", PERMISSIVE_RULES, TEST_UA, {}, severities=TEST_SEVERITIES_STR
+    ) as artifacts:
+        assert artifacts.scan_status == 'success'
 
 
 # ==========================================
@@ -520,7 +544,8 @@ def test_triage_report_is_advisory_and_never_gates_pipeline_flow(mocker, mock_ar
     mock_upload = mocker.patch("bounty_scanner.scanner.upload_to_s3")
     mocker.patch("bounty_scanner.scanner.upload_scan_metadata")
 
-    main()  # must not raise / must not sys.exit
+    # mock_artifacts has default scan_status='success' -- must not sys.exit
+    main()
 
     mock_upload.assert_called_once_with("example.com", None, mock_artifacts)
 
@@ -629,6 +654,43 @@ def test_main_success(mocker, mock_triage_report, mock_artifacts):
     mock_upload.assert_called_once_with("example.com", mock_triage_report, mock_artifacts)
     # run_recon_pipeline must receive the loaded program's ScopeRules.
     assert mock_recon.call_args[0][1] is PERMISSIVE_RULES
+
+
+def test_main_exits_nonzero_on_partial_scan(mocker, mock_triage_report, mock_artifacts):
+    """M5: when a recon stage errors or times out, scan_status is 'partial'
+    and main() must exit non-zero so the workflow gate fires.  Uploads must
+    still complete before the exit -- partial findings are preserved."""
+    mocker.patch(
+        "sys.argv",
+        [
+            "scanner.py",
+            "example.com",
+            "--program",
+            "acme",
+            "--contact-url",
+            "https://hackerone.com/seuss",
+            "--scope-uri",
+            "s3://b/k",
+        ],
+    )
+    mocker.patch("bounty_scanner.scanner.load_program_scope", return_value=_program_scope())
+
+    # Simulate a partial scan: artifacts carry scan_status='partial'
+    mock_artifacts.scan_status = 'partial'
+    mock_recon_cm = MagicMock()
+    mock_recon_cm.__enter__.return_value = mock_artifacts
+    mocker.patch("bounty_scanner.scanner.run_recon_pipeline", return_value=mock_recon_cm)
+
+    mocker.patch("bounty_scanner.scanner.triage_findings", return_value=mock_triage_report)
+    mock_upload = mocker.patch("bounty_scanner.scanner.upload_to_s3")
+    mocker.patch("bounty_scanner.scanner.upload_scan_metadata")
+
+    with pytest.raises(SystemExit) as excinfo:
+        main()
+
+    assert excinfo.value.code == 1
+    # Uploads must have completed before the exit.
+    mock_upload.assert_called_once_with("example.com", mock_triage_report, mock_artifacts)
 
 
 def test_main_missing_args(mocker):
