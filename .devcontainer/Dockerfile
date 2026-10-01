@@ -17,8 +17,8 @@
 # `bookworm` is the correct one -- verified against the registry during the build pass.
 FROM mcr.microsoft.com/devcontainers/base:bookworm
 
-ARG TOFU_VERSION=1.12.5
-ARG TOFU_SHA256=a6894d45ae7a17ce83189cce8fe04b5a65f68cefceb62455b5a6a89fa53ab38f
+ARG TOFU_VERSION=1.13.0
+ARG TOFU_SHA256=1f0cb37fc85dea4e7633a72aca2332b801f72650a32be911b8b9b32907f214fb
 # Pinned to match the tofu-validate required check's setup-tflint version exactly.
 ARG TFLINT_VERSION=0.64.0
 ARG TFLINT_SHA256=cca9d13e2e1d7a2c627af60ff899a3c9b74212899416aeb96ec764d2ef954537
@@ -48,9 +48,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       jq \
     && rm -rf /var/lib/apt/lists/*
 
-# OpenTofu -- ci.yml pins only the setup-opentofu ACTION (v2.0.2), not a tofu binary
-# version, so there is no CI value to match here. This build session selected the
-# current stable release at the time DC was built.
+# OpenTofu -- must equal tofu_version in every setup-opentofu step (ci.yml, deploy-infra.yml,
+# plan-infra.yml, run-scan.yml); bump them together (603-Identity/devcontainers#98).
 RUN curl -fsSLo /tmp/tofu.tar.gz \
       "https://github.com/opentofu/opentofu/releases/download/v${TOFU_VERSION}/tofu_${TOFU_VERSION}_linux_amd64.tar.gz" \
     && echo "${TOFU_SHA256}  /tmp/tofu.tar.gz" | sha256sum -c - \
