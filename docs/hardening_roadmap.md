@@ -57,11 +57,16 @@ the wrapper (loop-orchestrator S47-D12; comments on #7/#13).
 
 | Sprint | Closes | Scope |
 |---|---|---|
-| **S0 — Governance & CI/CD hardening** | #6, #8, #9, #10 | Branch-protection ruleset + minimal working method; gated OpenTofu deploy (plan-on-PR + apply-on-merge, `production` Environment approval); non-bypassable CI on all paths; `run-scan.yml` injection fix + drop unused `GITHUB_TOKEN`. **Also unblocks loop-orchestrator S47's #18** (same file as #6). |
+| **S0 — Governance & CI/CD hardening** | #6, #8, #9, #10 | Branch-protection ruleset + minimal working method; gated OpenTofu deploy (plan-on-PR + apply-on-merge, `production` Environment approval); non-bypassable CI on all paths; `run-scan.yml` injection fix + drop unused `GITHUB_TOKEN`. **Also unblocks loop-orchestrator S47's #18** (same file as #6). *#8 and #10 were not closed by S0; carried to SG (#142, #143) on 2026-09-11.* |
 | **SC — `scope-core` extraction** (BI-D6) — **DONE** | new | **Was the prerequisite for S1.** Extracted loop-orchestrator's scope validator + ingestion sanitizer into `glunk-works/scope-core` (public) and re-pointed loop-orchestrator at it — local copies deleted — via loop-orchestrator [#182](https://github.com/glunk-works/loop-orchestrator/pull/182), 2026-07-22. Cross-repo; touched no bounty-infra `src/`. Verified 2026-07-25: shipped logic is byte-identical to the originals modulo import paths, the three security invariants hold, and the non-PyPI tarball dependency clears `dependency-audit`/`sbom` in real CI. `sprints/SC_scope_core_extraction/sprint_plan.md`. |
 | **S1 — Scanner security core** — **DONE** | #7, #13, **#32** | Structural scope check **consumed from `scope-core`** (BI-D6), enforced at **three** points — input gate, discovered-set filter, pre-nuclei revalidation (BI-D7) — over a HackerOne-vocabulary RoE fetched from S3 (BI-D8/D9); triage-prompt hardening (fence + sanitize target-derived fields; triage advisory-only); scanner traffic attribution + rate limiting. **#32 joins S1** — it lands on the same `run_recon_pipeline` argv the scope filter is inserted into, and is thematically one change with #7. Planned 2026-07-22, **implemented and merged 2026-07-22** (PRs #40/#41/#42), **verified 2026-07-25**: all five tasks meet their acceptance criteria with behavioral tests (every rejection path asserts `subprocess.run` never ran), full green gate (73 tests, ruff+bandit, tofu). **Hermetically verified; live smoke (real S3 RoE fetch under the IAM grant, rate-limit flags actually throttling the pinned httpx/nuclei, UA on the wire, contact URL resolves) deferred → #84** — `run-scan.yml` is `workflow_dispatch`-only so the external side does not run until a real dispatch, and a real RoE object is an operator action (BI-D8/D9). #7/#13/#32 closed; deferred H1 RoE sync tracked in #82, Bugcrowd hand-authored constraint in #83. Two accepted residuals (optional S2 hardening): NFKC-stable *rejection* not taken (the required same-bytes invariant **is** met), and the `severity` field is un-`sanitize()`d but fenced + `json.dumps`-escaped. `sprints/S1_scanner_security_core/sprint_plan.md`. |
-| **S2 — Scanner robustness** | #12, #14 | Pin tools/templates/deps (reproducible builds); distinguish partial/failed scans from clean success. **#11 closed by SE** — the Fargate task role it targeted no longer exists; the STS session policy SE-MG2 introduced (per-scan, per-domain-scoped, no standing role) is the least-privilege replacement. |
-| **SG — CI gate expansion** | new | Adopt the four shared gates (`secrets-scan`/gitleaks, `dependency-audit`, `sbom`, `pr-title`) + **`zizmor`** (workflow security — detects the template-injection class that was #6, converting T4's fix from done-once into can't-regress) + container image scan (trivy/grype) + IaC security scan (checkov/trivy-config; `tflint` lints, it does not scan). |
+| **S2 — Scanner robustness** — **DISSOLVED 2026-09-11** | — | Never planned or started; its scope was redistributed in the S3 planning pass: **#14 → S3** (a partial scan reporting success would corrupt the demo — via #110), **#12, #8, #10 → SG** (hardening debts, not demo blockers — via #141, #142, #143). **#11 closed by SE** — the Fargate task role it targeted no longer exists; the STS session policy SE-MG2 introduced (per-scan, per-domain-scoped, no standing role) is the least-privilege replacement. |
+| **SG — CI gate expansion & supply chain** | #8, #10, #12 + new | [Milestone 4](https://github.com/glunk-works/bounty-infra/milestone/4). The five substrate-independent gates (`secrets-scan`/gitleaks, `dependency-audit`, `sbom`, `pr-title`, **`zizmor`** — which detects the template-injection class that was #6, converting T4's fix from done-once into can't-regress) are **already live**. Remaining: the BI-D20 tooling set (Trivy required, Snyk non-required, Checkov, Semgrep, cosign + SLSA, passive ZAP, the OWASP-skills audit) plus S2's hardening debts. |
+| **S3 — MVP thin slice** (BI-D14..D20) — **active** | #14, #76, #82, #84 + new | [Milestone 1](https://github.com/glunk-works/bounty-infra/milestone/1), planned 2026-09-11 for a 2026-09-16 demo. HackerOne scope → S3 RoE (BI-D14) → Environment-gated scan (BI-D16) → advisory triage → hash-chained run ledger; plus the persona registry (BI-D15), the governance mapping (BI-D18), runbooks, and a kill switch that is `BLOCKING` on the first live scan (#117). **Fallback line:** #118 (operator read path) and #119 (DefectDojo) drop first. |
+| **S4 — Governance & audit layer** | new | [Milestone 2](https://github.com/glunk-works/bounty-infra/milestone/2). Autonomy-tier enforcement in code, Object Lock on the ledger, an independent read-only Governance Auditor, signed per-run attestations, the prompt-injection test corpus, the AI incident runbook, prompt/model change control. Closes most of the known-gap register. |
+| **S5 — Agentic pipeline v1 (API lane)** | new | [Milestone 3](https://github.com/glunk-works/bounty-infra/milestone/3). Metered, budget-capped persona stages over post-scan artifacts. **Opens with a spike** (#127): extend loop-orchestrator (multi-provider, non-keyring credentials) vs. build stages directly on the SDKs — not pre-decided. |
+| **S6 — Slack Socket Mode control plane** | new | [Milestone 5](https://github.com/glunk-works/bounty-infra/milestone/5). Slack becomes the approval surface (BI-D16's later half): Bolt app, approve/reject buttons with approver identity to the ledger, `/scan` requests, threaded status. |
+| **S7 — Multi-platform & scale** | #18, #83 + new | [Milestone 6](https://github.com/glunk-works/bounty-infra/milestone/6). Bugcrowd public scope feed and hand-authored private-program RoE (BI-D14's later half); the optional persistent VM (BI-D17); reserved egress IP + abuse-team notification (SE-MG5). |
 | **SE — Egress migration (BI-D5)** — **DONE** | closes #11 | Retire ECS/VPC/ECR from `infra/**`; per-scan ephemeral VM on Vultr with a reserved IP; re-point `run-scan.yml` at the new launcher; credential path for S3 write; provider abuse-team notification. Phase 1 (stand-up + live proof) and Phase 2 (AWS Fargate teardown) both merged; `sprints/SE_egress_migration/sprint_plan.md` has the full record. |
 | **SW — Way of working** (BI-D10..D13) | **#19** | Extract loop-orchestrator's Claude Code workflow layer (7 skills, 4 portable agents, the SessionStart cursor hook, the Global Conventions) into a **plugin** published from a new `glunk-works/claude-workbench`, parameterized by a per-repo `.ai/project.yml`; adopt here first. **Retires BI-D3** — the plugin repo *is* the central conventions home. Independent of every other sprint; touches no `src/`, `infra/`, or workflow. `sprints/SW_way_of_working/sprint_plan.md`. |
 
@@ -88,8 +93,10 @@ independent of both** and can be sequenced on its own merits. Its one prerequisi
 **SC before S1** (BI-D6), since S1's first task is "add the `scope-core` dependency" —
 **was satisfied: SC landed 2026-07-22** (loop-orchestrator #182, verified 2026-07-25).
 **S1 then shipped the same day (PRs #40/#41/#42) and was verified DONE 2026-07-25** — see its
-sprint-table row. **The active frontier is now S2** (scanner robustness, #12/#14); the five
-substrate-independent SG gates can still land in parallel.
+sprint-table row. *(Superseded 2026-09-11:)* S2 never opened — it was **dissolved into S3/SG**
+(see its row), and the five substrate-independent SG gates have since landed. **The active
+frontier is S3**, worked in issue order on its milestone (BI-D19); the remaining SG work is
+independent of it and can land in parallel.
 
 ## RESOLVED — the central conventions repo (BI-D3, superseded by BI-D10 on 2026-07-22)
 
@@ -418,6 +425,111 @@ Full reasoning and the task breakdown: `sprints/SW_way_of_working/sprint_plan.md
   a repo mid-sprint 47 behind a hard `architect-review` gate, and generalizes with an audience of
   one. **Both at once** — if `/resume` breaks, the tool used to recover is the broken one.)
 
+## Locked decisions (S3 planning pass, 2026-09-11, owner-confirmed)
+
+Decided in the S3 planning pass, then amended by its own self-critique before any issue was
+filed — the entries below are the **post-critique** form. The plan itself is the GitHub
+milestones (BI-D19); the task record for each consequence is the issue cited. A rejected
+alternative marked *(confirmed at recording, 2026-10-02)* was implicit on 2026-09-11 and made
+explicit, with the owner's confirmation, when these entries were written (#100).
+
+- **BI-D14 (2026-09-11) — HackerOne first.** Program scope and policy are pulled from the Hacker
+  API into the existing S3 RoE format (BI-D8/D9) by a scheduled sync job (#103, closes #82),
+  authenticating with a read-only researcher token held in Infisical (#102) — no submission from
+  that token, ever. The sync is **deterministic and never sets `automated_scanning_allowed`**:
+  whether a program permits automated testing is read from policy prose by a human, and the RoE
+  records who attested and when; the loader fails closed without it (#104). That also keeps an
+  LLM out of the sync path entirely. Bugcrowd follows in S7 via the public scope feed (#147),
+  with private programs hand-authored (#83, #148). (Rejected: **Bugcrowd first** — it has no
+  researcher API, so its RoE can only be hand-authored or scraped from a third-party feed.
+  **Model-extracted policy flags in the sync** — puts untrusted policy prose in front of a model
+  on the path that decides what may be scanned.)
+- **BI-D15 (2026-09-11) — one persona registry, two runtimes.** Each agent role is a versioned
+  spec in `agents/registry/<role>.yml` — purpose, autonomy tier (BI-D18), runtime, exact model
+  id, tool allowlist, inputs, outputs, prohibitions, owner, review date — validated in CI (#112).
+  It renders to **repo-local** Claude Code subagents (Max-funded, #113) and to API-lane stages
+  (metered, budget-capped — S5, whose runtime is itself an open spike, #127). The registry
+  **is** the AI-system inventory the governance frameworks require. Model routing follows cost
+  profile: Fable only on the judgment-heavy, low-volume `claude-code` personas (architect,
+  security-critic, pre-submission-reviewer); nothing metered routes to it. The Governance
+  Auditor runs a different model from the Report Drafter so their errors are not correlated.
+  (Rejected: **personas inside the `way-of-working` plugin** — BI-D12: the plugin holds only
+  what works in any repo, and these encode a bug-bounty pipeline. **Separate hand-maintained
+  definitions per runtime** — two sources of truth drift, and neither is an auditable inventory
+  *(confirmed at recording, 2026-10-02)*.)
+- **BI-D16 (2026-09-11) — MVP approval is a GitHub Environment gate; Slack is notify-only until
+  S6.** `run-scan.yml` gains a credential-less `approve` job on a `scan-approval` Environment
+  with the operator as required reviewer, and the scan job `needs:` it (#106). Because the
+  Environment sits on the *approve* job, **the scan job's OIDC subject does not change** — the
+  subject-precedence trap in `CLAUDE.md` is avoided by construction. Approver identity comes
+  from GitHub's deployment record and is written to the ledger. Slack carries request, approval
+  link, status and summary (#107); the Socket Mode app makes Slack the approval surface in S6
+  (#144). (Rejected: **Slack reaction approvals polled by a scheduled Actions job** — the
+  original draft. Anyone in the channel can react, so it needs an approver allowlist; the
+  approval does not bind to one request and target, so it can be swapped onto a different scan;
+  and a scheduled poller runs at five-minute granularity with no delivery guarantee.)
+- **BI-D17 (2026-09-11) — ephemeral only.** No standing VM: compute stays the per-scan Vultr VM
+  (BI-D5) plus GitHub Actions. DefectDojo runs via docker compose inside the devcontainer (#119)
+  and imports from S3 — which needs an operator read-only path, since the laptop holds no AWS
+  credentials by design (#118). Both sit **below the S3 fallback line**. A persistent VM hosting
+  DefectDojo and the Slack app is an S7 option (#149), to be earned, not assumed. (Rejected:
+  **one small persistent Vultr VM** — roughly $6–12/month and one more always-on host to
+  harden, before the pipeline has shown it needs one.)
+- **BI-D18 (2026-09-11) — governance mapping and three autonomy tiers.** Controls are mapped to
+  **NIST AI RMF** (with its Generative AI Profile), **MITRE ATLAS**, **ISO/IEC 42001**, and the
+  **OWASP LLM Top 10 and Agentic** threats, in a control matrix that links every claim to the
+  file or workflow implementing it (#115). Three tiers: **T1** autonomous read-only, **T2**
+  notify-and-proceed, **T3** mandatory human approval — the only T3 action is the one that
+  touches a target (scan dispatch). Every run writes an append-only ledger to S3: in S3 that is
+  write-once keys, a hash chain and a versioned bucket (#111); compliance-mode **Object Lock**
+  follows in S4 (#120). Gaps are recorded honestly in the known-gap register below rather than
+  implied away. (Rejected: **Object Lock in the MVP** — *deferred, not rejected*: it is a
+  bucket-level property owned by `global-bootstrap` (global-bootstrap #15). **A single framework
+  (NIST AI RMF only)** — AI RMF says *what* to govern but carries no technique-level threat
+  catalog; ATLAS and OWASP supply that, and 42001 is the certifiable management-system standard
+  *(confirmed at recording, 2026-10-02)*.)
+- **BI-D19 (2026-09-11) — planning lives in GitHub.** From S3 on, **a sprint is a milestone and
+  a task is an issue** with acceptance criteria and marked `BLOCKING:` preconditions. Local docs
+  keep only decisions (this file) and the cursor. `sprints/*/sprint_plan.md` (S0–SW) are
+  historical; no S2+ plan file exists by design. The plugin reads milestones through
+  `planning.kind: github_milestones` in `.ai/project.yml` (claude-workbench #86, #99) — a schema
+  key, never a local shadow of `resume`. (Rejected: **continue `sprint_plan.md` files** — a
+  second copy of state GitHub already tracks (open/closed, assignment, dependency links),
+  invisible to issue search and cross-repo references, and it drifts from the issues it
+  describes.)
+- **BI-D20 (2026-09-11) — the tooling set.** All free tier; delivered by the SG milestone:
+
+  | Function | Choice | Why |
+  |---|---|---|
+  | Dependency updates | **Dependabot** (kept) | Already live and green here. |
+  | SCA + container | **Trivy** image scan required (#134); **Snyk** free tier *non-required* (#135); `pip-audit` kept | A third-party quota or outage must never block a merge. |
+  | IaC security | **Checkov** on `infra/`, Dockerfiles, workflows → SARIF (#136) | Complements `zizmor`, which covers Actions only. |
+  | SAST | **Semgrep** OSS rules on `src/`, required (#137) | Fast, no account needed. |
+  | Findings management | **DefectDojo**, local (BI-D17, #119) | Imports nuclei and httpx output natively. |
+  | DAST | **OWASP ZAP baseline**, passive only, behind the approval gate (#139) | Active testing stays with nuclei under RoE rate limits. |
+  | Supply chain | **cosign** signing + **SLSA** provenance; the VM verifies before pull (#138) | Cheap to add; closes the "public image, no credential" trust gap. |
+  | Third-party skills | Audit the OWASP testing skills plugin before adoption (#140) | Untrusted third-party code until reviewed. |
+
+  (Rejected: **Renovate here** — running it beside Dependabot produces duplicate PRs; it is
+  adopted in loop-orchestrator instead, where nothing exists yet. **Active ZAP scans** — too
+  noisy against bounty targets to stay inside program policy.)
+
+## Known-gap register
+
+Where the pipeline falls short of what BI-D18's frameworks expect, recorded rather than implied
+away — a known-gap register is itself a governance artifact. A row leaves only when its issue
+closes. Seeded 2026-10-02 with the four gaps the S3 plan already named (#115) plus tier
+enforcement (#122); S4 owns the
+register from here, and #115's control matrix links each gap to the controls it weakens.
+
+| Gap | Why it matters | Owner | Target | Tracking |
+|---|---|---|---|---|
+| Run ledger is not immutable — write-once keys + hash chain + versioning, but no Object Lock | A principal with bucket write could delete or rewrite history; the hash chain shows tampering but does not prevent it | operator | S4 | #120, global-bootstrap #15 |
+| Governance Auditor is not independent — runs in-pipeline with the pipeline's credentials | Its attestation is produced by the system it audits; a compromised run could suppress or forge it | operator | S4 | #121, global-bootstrap #16 |
+| Autonomy tiers are defined (BI-D18) but not enforced in code | Nothing yet stops a T1 stage from taking a T3 action; the tier is a label in the registry, not a control | operator | S4 | #122 |
+| No prompt-injection test corpus for model-backed stages | Triage reads hostile, target-derived text; fencing and sanitizing are implemented but not measured | operator | S4 | #124 |
+| No AI incident response runbook or kill-switch drill cadence | S3 plans abort and out-of-scope runbooks (#116) but not model misbehavior, and the kill switch is drilled once (#117), not on a schedule | operator | S4 | #125 |
+
 ## Cross-repo coupling
 
 - **loop-orchestrator #18** (recon dispatch contract) lands `seed`/`token` inputs in
@@ -443,3 +555,5 @@ Full reasoning and the task breakdown: `sprints/SW_way_of_working/sprint_plan.md
 - `sprints/S0_governance_hardening/sprint_plan.md` — the detailed S0 plan.
 - `sprints/SW_way_of_working/sprint_plan.md` — the SW plan (plugin extraction, `.ai/project.yml`
   schema, the coupling inventory per skill/agent, BI-D10..D13).
+- `sprints/*/sprint_plan.md` are **historical** (S0–SW). From S3 on the plan is GitHub
+  milestones (BI-D19): https://github.com/glunk-works/bounty-infra/milestones

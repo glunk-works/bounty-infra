@@ -8,8 +8,7 @@ not copy it. Regenerate this at the end of every working session.
 **S3 — MVP thin slice is the active sprint.** Planned 2026-09-11, **due Wed 2026-09-16**.
 **The sprint plan is the GitHub milestone, not a local file (BI-D19):**
 https://github.com/glunk-works/bounty-infra/milestone/1 — work its open issues in number order
-(#98 upward). Decisions BI-D14..D20 are recorded by #100; until it merges, this file and the
-issue bodies are the record.
+(#98 upward). Decisions BI-D14..D20 are recorded in `docs/hardening_roadmap.md` (#100).
 
 Fallback line: if Tuesday looks bad, #118 (operator read path) and #119 (DefectDojo) drop
 first; the persona registry (#112), governance mapping (#115), runbooks (#116) and the live
@@ -35,5 +34,5 @@ scan (#117) are the demo.
 ## Pointers
 
 - Milestones: https://github.com/glunk-works/bounty-infra/milestones
-- `docs/hardening_roadmap.md` — decisions BI-D1..D13 (D14..D20 land via #100).
+- `docs/hardening_roadmap.md` — decisions BI-D1..D20 and the known-gap register.
 - `sprints/*/sprint_plan.md` — historical (S0–SW). No S2/S3 plan file exists by design.

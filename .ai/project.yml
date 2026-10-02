@@ -27,7 +27,7 @@ sprints_dir: sprints
 threat_model: docs/hardening_roadmap.md
 
 decisions:
-  log: docs/hardening_roadmap.md   # BI-D1..BI-D13 are recorded there.
+  log: docs/hardening_roadmap.md   # BI-D1..BI-D20 are recorded there.
   prefix: BI-D
 
 backlog:

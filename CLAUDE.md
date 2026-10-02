@@ -27,8 +27,9 @@ through Infisical (`env.AWS_OIDC_ROLE_ARN`, `env.TF_STATE_BUCKET`, `vars.IDENTIT
 
 > **This repo is under active hardening — read the roadmap before extending it.**
 > [`docs/hardening_roadmap.md`](docs/hardening_roadmap.md) is the reference of record:
-> the sprint sequence (S0 governance → S1 scanner security → S2 robustness, plus **SG** CI
-> gates and **SE** egress migration), and the locked decisions (**BI-D1..BI-D13**).
+> the sprint sequence (S0 governance → S1 scanner security → S3–S7, which are GitHub
+> milestones, plus **SG** CI gates and **SE** egress migration; S2 was dissolved into S3/SG),
+> and the locked decisions (**BI-D1..BI-D20**).
 >
 > **The compute-model migration (BI-D5) is DONE as of SE Phase 2:** scan egress runs on
 > per-scan ephemeral Vultr VMs; AWS is control-plane only. Any new AWS compute/networking
@@ -131,8 +132,9 @@ does not run cleanly from a laptop by design.
 - **`.ai/next-steps.md`** — the live cursor: current sprint/task, next action, which model.
   Read this first.
 - **`.ai/project.yml`** — this repo's parameterization of the working method.
-- **`docs/hardening_roadmap.md`** — reference of record: posture, BI-D1..D13, sprint
-  sequence, public-repo rules, cross-repo coupling. Also serves as the threat model.
+- **`docs/hardening_roadmap.md`** — reference of record: posture, BI-D1..D20, sprint
+  sequence, the known-gap register, public-repo rules, cross-repo coupling. Also serves as the
+  threat model.
 - **`sprints/*/sprint_plan.md`** — the per-sprint plans (S0, S1, SC, SW).
 - **`glunk-works/global-bootstrap`** — owns this repo's AWS foundation: the OpenTofu state
   bucket + lock table, the findings bucket + KMS key, and **every GitHub OIDC role**
