@@ -4,12 +4,14 @@ import importlib.metadata
 import json
 import logging
 import os
+import signal
 import subprocess
 import sys
 import tempfile
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from typing import Literal
 from urllib.parse import urlparse
 
 import boto3
@@ -47,6 +49,37 @@ UNTRUSTED_DATA_FENCE_START = "<UNTRUSTED_SCAN_DATA>"
 UNTRUSTED_DATA_FENCE_END = "</UNTRUSTED_SCAN_DATA>"
 
 
+# #110: the scan outcome contract. Anything but "success" exits non-zero so
+# run-scan.yml's fail gate fires -- a partial scan must never read as green.
+ScanStatus = Literal["success", "partial", "failed", "cancelled"]
+# partial is 3, not 2: argparse already exits 2 on a usage error, and a red run
+# must not be ambiguous between "bad argv" and "partial scan". 130 survives only
+# a direct kill/`docker stop`; the VM's `timeout` wrapper reports 124 instead.
+EXIT_CODES: dict[ScanStatus, int] = {
+    "success": 0,
+    "failed": 1,
+    "partial": 3,
+    "cancelled": 130,
+}
+
+# SIGTERM handling. The handler may only RAISE while a pipeline subprocess
+# stage is running (to abort it); once the pipeline has yielded, raising would
+# propagate out of main()'s `with` body and skip triage and the uploads. After
+# that point it only records the request, so the uploads finish and the exit
+# code still reflects the cancellation. Known residual: the arm/disarm
+# transitions are a few bytecodes wide, so a second SIGTERM landing exactly
+# there can still skip the uploads (the exit stays non-zero).
+_cancel_requested = False
+_raise_on_cancel = False
+
+
+def _on_sigterm(signum, frame):
+    global _cancel_requested
+    _cancel_requested = True
+    if _raise_on_cancel:
+        raise KeyboardInterrupt
+
+
 @dataclass
 class ReconArtifacts:
     findings: list[dict]
@@ -57,6 +90,9 @@ class ReconArtifacts:
     # filters. Written to their own S3 artifact -- NEVER a log line (BI-D4).
     dropped_hosts: list[str] = field(default_factory=list)
     dropped_out_of_scope_count: int = 0
+    # #110: an honest outcome, not just "the process returned". main() maps it
+    # to an exit code via EXIT_CODES.
+    scan_status: ScanStatus = "success"
 
 
 class Finding(BaseModel):
@@ -235,123 +271,142 @@ def run_recon_pipeline(
         nuclei_file=nuclei_file,
     )
     header_args = _tool_header_args(user_agent, extra_headers)
+    subfinder_done = False
+    global _raise_on_cancel
 
     try:
-        logger.info(f"Running subfinder on {domain}...")
-        subfinder_cmd = ["subfinder", "-d", domain, "-silent"]
-        with open(artifacts.subs_file, "w") as f_out:
-            subprocess.run(
-                subfinder_cmd,
-                stdout=f_out,
-                check=True,
-                timeout=_stage_timeout(subfinder_cmd),
-            )
+        try:
+            _raise_on_cancel = True
+            if _cancel_requested:  # SIGTERM landed before the handler was armed
+                raise KeyboardInterrupt
+            logger.info(f"Running subfinder on {domain}...")
+            subfinder_cmd = ["subfinder", "-d", domain, "-silent"]
+            with open(artifacts.subs_file, "w") as f_out:
+                subprocess.run(
+                    subfinder_cmd,
+                    stdout=f_out,
+                    check=True,
+                    timeout=_stage_timeout(subfinder_cmd),
+                )
+            subfinder_done = True
 
-        # Check if subfinder found anything before continuing
-        if os.path.getsize(artifacts.subs_file) > 0:
-            kept, dropped = _filter_hosts_by_scope(
-                rules,
-                artifacts.subs_file,
-                filtered_subs_file,
-                artifacts.dropped_hosts,
-            )
-            artifacts.dropped_out_of_scope_count += dropped
-            logger.info(
-                f"discovered-set scope filter: kept {kept}, dropped {dropped} out-of-scope"
-            )
+            # Check if subfinder found anything before continuing
+            if os.path.getsize(artifacts.subs_file) > 0:
+                kept, dropped = _filter_hosts_by_scope(
+                    rules,
+                    artifacts.subs_file,
+                    filtered_subs_file,
+                    artifacts.dropped_hosts,
+                )
+                artifacts.dropped_out_of_scope_count += dropped
+                logger.info(
+                    f"discovered-set scope filter: kept {kept}, dropped {dropped} out-of-scope"
+                )
 
-            if kept == 0:
-                # Distinct from "no subdomains found": subfinder found
-                # hosts, but none were in scope for this program.
-                logger.warning("Every discovered host was out of scope.")
-            else:
-                logger.info("Running httpx for liveness check...")
-                httpx_cmd = [
-                    "httpx",
-                    "-silent",
-                    "-rl",
-                    str(rate_limit),
-                    "-t",
-                    str(concurrency),
-                    *header_args,
-                ]
-                with (
-                    open(filtered_subs_file, "r") as f_in,
-                    open(artifacts.live_file, "w") as f_out,
-                ):
-                    subprocess.run(
-                        httpx_cmd,
-                        stdin=f_in,
-                        stdout=f_out,
-                        check=True,
-                        timeout=_stage_timeout(httpx_cmd),
-                    )
-
-                if os.path.getsize(artifacts.live_file) > 0:
-                    kept2, dropped2 = _filter_hosts_by_scope(
-                        rules,
-                        artifacts.live_file,
-                        filtered_live_file,
-                        artifacts.dropped_hosts,
-                        extract_hostname=True,
-                    )
-                    artifacts.dropped_out_of_scope_count += dropped2
-                    logger.info(
-                        f"pre-nuclei scope revalidation: kept {kept2}, dropped {dropped2} out-of-scope"
-                    )
-
-                    if kept2 == 0:
-                        logger.warning("Every live host was out of scope.")
-                    else:
-                        logger.info(
-                            f"Running nuclei scanning for severities: {severities}..."
+                if kept == 0:
+                    # Distinct from "no subdomains found": subfinder found
+                    # hosts, but none were in scope for this program.
+                    logger.warning("Every discovered host was out of scope.")
+                else:
+                    logger.info("Running httpx for liveness check...")
+                    httpx_cmd = [
+                        "httpx",
+                        "-silent",
+                        "-rl",
+                        str(rate_limit),
+                        "-t",
+                        str(concurrency),
+                        *header_args,
+                    ]
+                    with (
+                        open(filtered_subs_file, "r") as f_in,
+                        open(artifacts.live_file, "w") as f_out,
+                    ):
+                        subprocess.run(
+                            httpx_cmd,
+                            stdin=f_in,
+                            stdout=f_out,
+                            check=True,
+                            timeout=_stage_timeout(httpx_cmd),
                         )
-                        nuclei_cmd = [
-                            "nuclei",
-                            "-s",
-                            severities,
-                            "-jsonl",
-                            "-silent",
-                            "-rl",
-                            str(rate_limit),
-                            "-c",
-                            str(concurrency),
-                            *header_args,
-                        ]
-                        with (
-                            open(filtered_live_file, "r") as f_in,
-                            open(artifacts.nuclei_file, "w") as f_out,
-                        ):
-                            # NUCLEI LEVEL FILTERING: Using the -s flag to filter severities at the engine level
-                            subprocess.run(
-                                nuclei_cmd,
-                                stdin=f_in,
-                                stdout=f_out,
-                                check=True,
-                                timeout=_stage_timeout(nuclei_cmd),
+
+                    if os.path.getsize(artifacts.live_file) > 0:
+                        kept2, dropped2 = _filter_hosts_by_scope(
+                            rules,
+                            artifacts.live_file,
+                            filtered_live_file,
+                            artifacts.dropped_hosts,
+                            extract_hostname=True,
+                        )
+                        artifacts.dropped_out_of_scope_count += dropped2
+                        logger.info(
+                            f"pre-nuclei scope revalidation: kept {kept2}, dropped {dropped2} out-of-scope"
+                        )
+
+                        if kept2 == 0:
+                            logger.warning("Every live host was out of scope.")
+                        else:
+                            logger.info(
+                                f"Running nuclei scanning for severities: {severities}..."
                             )
+                            nuclei_cmd = [
+                                "nuclei",
+                                "-s",
+                                severities,
+                                "-jsonl",
+                                "-silent",
+                                "-rl",
+                                str(rate_limit),
+                                "-c",
+                                str(concurrency),
+                                *header_args,
+                            ]
+                            with (
+                                open(filtered_live_file, "r") as f_in,
+                                open(artifacts.nuclei_file, "w") as f_out,
+                            ):
+                                # NUCLEI LEVEL FILTERING: Using the -s flag to filter severities at the engine level
+                                subprocess.run(
+                                    nuclei_cmd,
+                                    stdin=f_in,
+                                    stdout=f_out,
+                                    check=True,
+                                    timeout=_stage_timeout(nuclei_cmd),
+                                )
 
-                        # Read the nuclei output line-by-line (highly memory efficient)
-                        with open(artifacts.nuclei_file, "r") as results:
-                            for line in results:
-                                if line.strip():
-                                    try:
-                                        artifacts.findings.append(json.loads(line))
-                                    except json.JSONDecodeError:
-                                        continue
-        else:
-            logger.warning("No subdomains found.")
+                            # Read the nuclei output line-by-line (highly memory efficient)
+                            with open(artifacts.nuclei_file, "r") as results:
+                                for line in results:
+                                    if line.strip():
+                                        try:
+                                            artifacts.findings.append(json.loads(line))
+                                        except json.JSONDecodeError:
+                                            continue
+            else:
+                logger.warning("No subdomains found.")
 
+        except subprocess.TimeoutExpired as e:
+            _raise_on_cancel = False
+            logger.error(f"Pipeline tool timed out after {e.timeout} seconds: {e.cmd}")
+            # Nothing usable if the very first stage never finished.
+            artifacts.scan_status = "partial" if subfinder_done else "failed"
+        except subprocess.CalledProcessError as e:
+            _raise_on_cancel = False
+            logger.error(f"Pipeline tool failed during execution: {e}")
+            artifacts.scan_status = "partial" if subfinder_done else "failed"
+        except KeyboardInterrupt:
+            # SIGTERM is routed here by main() (kill switch / VM teardown).
+            _raise_on_cancel = False
+            logger.error("Scan cancelled.")
+            artifacts.scan_status = "cancelled"
+
+        # The ONLY yield, outside the stage try: a body exception (incl. SIGINT)
+        # thrown back here propagates instead of being re-yielded.
+        _raise_on_cancel = False
         yield artifacts
 
-    except subprocess.TimeoutExpired as e:
-        logger.error(f"Pipeline tool timed out after {e.timeout} seconds: {e.cmd}")
-        yield artifacts  # Yield whatever was collected before the timeout
-    except subprocess.CalledProcessError as e:
-        logger.error(f"Pipeline tool failed during execution: {e}")
-        yield artifacts  # Yield whatever was collected before the crash
-
     finally:
+        _raise_on_cancel = False
         # Cleanup ephemeral disk space once the context manager exits
         for path in [
             artifacts.subs_file,
@@ -473,11 +528,15 @@ def triage_findings(
         return None
 
 
-def upload_to_s3(domain: str, report: TriageReport | None, artifacts: ReconArtifacts):
+def upload_to_s3(
+    domain: str, report: TriageReport | None, artifacts: ReconArtifacts
+) -> bool:
+    """True when the upload completed (or was deliberately skipped: no bucket
+    configured); False when it failed -- main() downgrades the scan status."""
     bucket_name = os.environ.get("S3_BUCKET_NAME")
     if not bucket_name:
         logger.warning("No S3_BUCKET_NAME env var found. Skipping S3 upload.")
-        return
+        return True
 
     timestamp = datetime.datetime.now(datetime.UTC).strftime("%Y%m%d_%H%M%S")
     s3 = boto3.client("s3")
@@ -530,11 +589,13 @@ def upload_to_s3(domain: str, report: TriageReport | None, artifacts: ReconArtif
             )
 
         logger.info("Upload complete.")
+        return True
     except Exception as e:  # noqa: BLE001 -- an artifact-upload failure must
         # not crash a scan that already ran to completion; boto3/S3 can raise
         # from several distinct exception hierarchies (ClientError, disk I/O
         # on upload_file, etc.) and all of them are equally non-fatal here.
         logger.error(f"Failed to upload to S3: {e}")
+        return False
 
 
 def upload_scan_metadata(
@@ -544,13 +605,14 @@ def upload_scan_metadata(
     synced_at: str,
     dropped_unknown_asset_type: int,
     dropped_out_of_scope_count: int,
-) -> None:
+    scan_status: ScanStatus,
+) -> bool:
     """Scan-run metadata as its OWN S3 artifact (S1 Task 3), never folded
     into `TriageReport` -- that model is Gemini's `response_schema`
     (adding a field there changes what the model is asked to emit)."""
     bucket_name = os.environ.get("S3_BUCKET_NAME")
     if not bucket_name:
-        return
+        return True
 
     timestamp = datetime.datetime.now(datetime.UTC).strftime("%Y%m%d_%H%M%S")
     s3 = boto3.client("s3")
@@ -561,6 +623,7 @@ def upload_scan_metadata(
         "roe_synced_at": synced_at,
         "dropped_unknown_asset_type": dropped_unknown_asset_type,
         "dropped_out_of_scope": dropped_out_of_scope_count,
+        "scan_status": scan_status,
     }
     try:
         s3.put_object(
@@ -568,9 +631,11 @@ def upload_scan_metadata(
             Key=f"{domain}/{timestamp}/scan_metadata.json",
             Body=json.dumps(metadata, indent=2),
         )
+        return True
     except Exception as e:  # noqa: BLE001 -- same rationale as upload_to_s3:
         # a metadata-upload failure must not crash an already-completed scan.
         logger.error(f"Failed to upload scan metadata: {e}")
+        return False
 
 
 def main():
@@ -673,40 +738,73 @@ def main():
     # Parse the comma-separated string into a clean Python set for the AI triage filter check
     target_severities = {s.strip().lower() for s in args.severities.split(",")}
 
-    # Context manager ensures files are deleted after block exits
-    with run_recon_pipeline(
-        args.domain,
-        program_scope.rules,
-        user_agent,
-        extra_headers,
-        severities=args.severities,
-        timeout=args.timeout,
-        rate_limit=args.rate_limit,
-        concurrency=args.concurrency,
-    ) as artifacts:
-        logger.info(f"Found {len(artifacts.findings)} raw findings. Triaging...")
-        report = triage_findings(
-            artifacts.findings, target_severities, args.max_findings
-        )
-
-        if report:
-            print("\n=== EXECUTIVE SUMMARY ===")
-            print(report.summary)
-            print("\n=== TOP 3 CRITICAL FINDINGS ===")
-            for idx, finding in enumerate(report.top_findings, 1):
-                print(f"\n{idx}. {finding.title} [{finding.severity}]")
-                print(f"   Target: {finding.target}")
-
-        # Upload AI data and raw disk artifacts
-        upload_to_s3(args.domain, report, artifacts)
-        upload_scan_metadata(
+    # SIGTERM (VM `timeout`, docker stop) cancels the pipeline stage; later
+    # it only records the request so the uploads still run. See _on_sigterm.
+    global _cancel_requested
+    _cancel_requested = False
+    previous_handler = signal.signal(signal.SIGTERM, _on_sigterm)
+    try:
+        # Context manager ensures files are deleted after block exits
+        with run_recon_pipeline(
             args.domain,
-            program_scope.program_handle,
-            program_scope.platform,
-            program_scope.synced_at,
-            program_scope.dropped_unknown_asset_type,
-            artifacts.dropped_out_of_scope_count,
-        )
+            program_scope.rules,
+            user_agent,
+            extra_headers,
+            severities=args.severities,
+            timeout=args.timeout,
+            rate_limit=args.rate_limit,
+            concurrency=args.concurrency,
+        ) as artifacts:
+            logger.info(f"Found {len(artifacts.findings)} raw findings. Triaging...")
+            # A cancelled scan skips the (slow, billed) Gemini call: the
+            # remaining time belongs to the uploads.
+            if _cancel_requested or artifacts.scan_status == "cancelled":
+                report = None
+            else:
+                report = triage_findings(
+                    artifacts.findings, target_severities, args.max_findings
+                )
+
+            if report:
+                print("\n=== EXECUTIVE SUMMARY ===")
+                print(report.summary)
+                print("\n=== TOP 3 CRITICAL FINDINGS ===")
+                for idx, finding in enumerate(report.top_findings, 1):
+                    print(f"\n{idx}. {finding.title} [{finding.severity}]")
+                    print(f"   Target: {finding.target}")
+
+            # A SIGTERM that arrived after the pipeline returned (triage,
+            # upload) still cancels the scan -- but never aborts the uploads.
+            if _cancel_requested and artifacts.scan_status == "success":
+                artifacts.scan_status = "cancelled"
+
+            # Upload AI data and raw disk artifacts. A failed upload means
+            # the findings are not in S3: that is not a successful scan.
+            s3_ok = upload_to_s3(args.domain, report, artifacts)
+            if not s3_ok and artifacts.scan_status == "success":
+                artifacts.scan_status = "failed"
+            if _cancel_requested and artifacts.scan_status == "success":
+                artifacts.scan_status = "cancelled"
+            meta_ok = upload_scan_metadata(
+                args.domain,
+                program_scope.program_handle,
+                program_scope.platform,
+                program_scope.synced_at,
+                program_scope.dropped_unknown_asset_type,
+                artifacts.dropped_out_of_scope_count,
+                artifacts.scan_status,
+            )
+            if not meta_ok and artifacts.scan_status == "success":
+                artifacts.scan_status = "failed"
+    finally:
+        signal.signal(signal.SIGTERM, previous_handler)
+
+    # Uploads are done: only now surface the outcome, so partial findings
+    # are preserved before the non-zero exit (#110). A SIGTERM after the
+    # metadata upload is deliberately ignored: everything is already stored.
+    if artifacts.scan_status != "success":
+        logger.error(f"Scan finished with status: {artifacts.scan_status}")
+    sys.exit(EXIT_CODES[artifacts.scan_status])
 
 
 if __name__ == "__main__":
