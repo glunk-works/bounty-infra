@@ -217,6 +217,7 @@ def test_run_recon_pipeline_scope_filters_discovered_set_before_httpx(mocker):
     assert httpx_call[1].strip() == "good.example.com"
     assert "evil.other.com" in artifacts.dropped_hosts
     assert artifacts.dropped_out_of_scope_count == 1
+    assert artifacts.scan_status == "success"  # all three stages ran
 
 
 def test_run_recon_pipeline_scope_revalidates_before_nuclei(mocker):
@@ -319,6 +320,7 @@ def test_run_recon_pipeline_subprocess_error(mocker):
 
     with run_recon_pipeline("example.com", PERMISSIVE_RULES, TEST_UA, {}) as artifacts:
         assert artifacts.findings == []
+        assert artifacts.scan_status == "failed"  # first stage never finished
 
 
 def test_run_recon_pipeline_subprocess_timeout(mocker):
@@ -329,6 +331,41 @@ def test_run_recon_pipeline_subprocess_timeout(mocker):
 
     with run_recon_pipeline("example.com", PERMISSIVE_RULES, TEST_UA, {}) as artifacts:
         assert artifacts.findings == []
+        assert artifacts.scan_status == "failed"
+
+
+def _fail_after_subfinder(exc):
+    def _run(argv, **kwargs):
+        if argv[0] == "subfinder":
+            kwargs["stdout"].write("a.example.com\n")
+            return MagicMock(returncode=0)
+        raise exc
+
+    return _run
+
+
+def test_run_recon_pipeline_later_stage_failure_is_partial(mocker):
+    mocker.patch(
+        "bounty_scanner.scanner.subprocess.run",
+        side_effect=_fail_after_subfinder(subprocess.CalledProcessError(1, "httpx")),
+    )
+    with run_recon_pipeline("example.com", PERMISSIVE_RULES, TEST_UA, {}) as artifacts:
+        assert artifacts.scan_status == "partial"
+
+
+def test_run_recon_pipeline_later_stage_timeout_is_partial(mocker):
+    mocker.patch(
+        "bounty_scanner.scanner.subprocess.run",
+        side_effect=_fail_after_subfinder(subprocess.TimeoutExpired("httpx", 5)),
+    )
+    with run_recon_pipeline("example.com", PERMISSIVE_RULES, TEST_UA, {}) as artifacts:
+        assert artifacts.scan_status == "partial"
+
+
+def test_run_recon_pipeline_interrupt_is_cancelled(mocker):
+    mocker.patch("bounty_scanner.scanner.subprocess.run", side_effect=KeyboardInterrupt)
+    with run_recon_pipeline("example.com", PERMISSIVE_RULES, TEST_UA, {}) as artifacts:
+        assert artifacts.scan_status == "cancelled"
 
 
 def test_run_recon_pipeline_timeout_is_one_shared_budget_not_per_tool(mocker):
@@ -520,7 +557,9 @@ def test_triage_report_is_advisory_and_never_gates_pipeline_flow(mocker, mock_ar
     mock_upload = mocker.patch("bounty_scanner.scanner.upload_to_s3")
     mocker.patch("bounty_scanner.scanner.upload_scan_metadata")
 
-    main()  # must not raise / must not sys.exit
+    with pytest.raises(SystemExit) as exc:  # exit code follows scan_status now (#110)
+        main()
+    assert exc.value.code == 0
 
     mock_upload.assert_called_once_with("example.com", None, mock_artifacts)
 
@@ -623,7 +662,9 @@ def test_main_success(mocker, mock_triage_report, mock_artifacts):
     mock_upload = mocker.patch("bounty_scanner.scanner.upload_to_s3")
     mocker.patch("bounty_scanner.scanner.upload_scan_metadata")
 
-    main()
+    with pytest.raises(SystemExit) as exc:
+        main()
+    assert exc.value.code == 0
 
     mock_triage.assert_called_once_with(mock_artifacts.findings, {"high", "critical"}, 10)
     mock_upload.assert_called_once_with("example.com", mock_triage_report, mock_artifacts)
@@ -685,7 +726,9 @@ def test_main_derives_scope_uri_from_program_and_bucket_when_not_overridden(mock
     mocker.patch("bounty_scanner.scanner.upload_to_s3")
     mocker.patch("bounty_scanner.scanner.upload_scan_metadata")
 
-    main()
+    with pytest.raises(SystemExit) as exc:
+        main()
+    assert exc.value.code == 0
 
     mock_load.assert_called_once_with("acme", bucket="findings-bucket", scope_uri=None)
 
@@ -740,3 +783,183 @@ def test_main_program_domain_mismatch_is_the_same_scope_violation_path(mocker):
 
     assert excinfo.value.code == 1
     mock_run.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "status,code", [("success", 0), ("failed", 1), ("partial", 3), ("cancelled", 130)]
+)
+def test_main_exit_code_follows_scan_status_after_uploads(
+    mocker, mock_triage_report, mock_artifacts, status, code
+):
+    mocker.patch(
+        "sys.argv",
+        ["scanner.py", "example.com", "--program", "acme",
+         "--contact-url", "https://hackerone.com/seuss", "--scope-uri", "s3://b/k"],
+    )
+    mocker.patch("bounty_scanner.scanner.load_program_scope", return_value=_program_scope())
+    mock_artifacts.scan_status = status
+    cm = MagicMock()
+    cm.__enter__.return_value = mock_artifacts
+    cm.__exit__.return_value = False  # a truthy MagicMock would swallow body errors
+    mocker.patch("bounty_scanner.scanner.run_recon_pipeline", return_value=cm)
+    mocker.patch("bounty_scanner.scanner.triage_findings", return_value=mock_triage_report)
+    order = MagicMock()
+    order.upload.return_value = True
+    order.meta.return_value = True
+    mocker.patch("bounty_scanner.scanner.upload_to_s3", order.upload)
+    meta = mocker.patch("bounty_scanner.scanner.upload_scan_metadata", order.meta)
+
+    with pytest.raises(SystemExit) as exc:
+        main()
+
+    assert exc.value.code == code
+    # Uploads ran (partial findings preserved) and metadata carries the status.
+    assert [c[0] for c in order.mock_calls] == ["upload", "meta"]
+    assert meta.call_args[0][-1] == status
+
+
+def test_upload_scan_metadata_records_scan_status(mocker):
+    mocker.patch.dict(os.environ, {"S3_BUCKET_NAME": "b"})
+    s3 = mocker.patch("bounty_scanner.scanner.boto3.client").return_value
+    from bounty_scanner.scanner import upload_scan_metadata
+
+    upload_scan_metadata("example.com", "acme", "hackerone", "t", 0, 0, "partial")
+    body = json.loads(s3.put_object.call_args.kwargs["Body"])
+    assert body["scan_status"] == "partial"
+
+
+@pytest.fixture(autouse=True)
+def _reset_signal_state(mocker):
+    import bounty_scanner.scanner as sc
+
+    mocker.patch.object(sc, "_cancel_requested", False)
+    mocker.patch.object(sc, "_raise_on_cancel", False)
+
+
+_ARGV = [
+    "scanner.py", "example.com", "--program", "acme",
+    "--contact-url", "https://hackerone.com/seuss", "--scope-uri", "s3://b/k",
+]
+
+
+def _real_pipeline_main(mocker, *, subfinder_hosts, triage_side_effect=None, s3_ok=True):
+    """Run main() through the REAL run_recon_pipeline generator (only the
+    subprocesses and S3/Gemini are faked)."""
+    mocker.patch("sys.argv", _ARGV)
+    mocker.patch("bounty_scanner.scanner.load_program_scope", return_value=_program_scope())
+    mocker.patch(
+        "bounty_scanner.scanner.subprocess.run",
+        side_effect=_make_subprocess_side_effect([], {"subfinder": subfinder_hosts}),
+    )
+    mocker.patch("bounty_scanner.scanner.triage_findings", side_effect=triage_side_effect or (lambda *a: None))
+    upload = mocker.patch("bounty_scanner.scanner.upload_to_s3", return_value=s3_ok)
+    meta = mocker.patch("bounty_scanner.scanner.upload_scan_metadata", return_value=True)
+    return upload, meta
+
+
+def test_sigterm_after_pipeline_still_uploads_and_exits_cancelled(mocker):
+    """The realistic arrival window (VM `timeout`): the pipeline already
+    returned, the process is in triage/upload. Must not crash the generator."""
+    import bounty_scanner.scanner as sc
+
+    import signal
+
+    seen = {}
+
+    def _triage(*a):
+        # main() must have installed OUR handler, and the real pipeline has
+        # already yielded (disarmed) -- so this only records the request.
+        seen["handler"] = signal.getsignal(signal.SIGTERM)
+        sc._on_sigterm(15, None)
+
+    upload, meta = _real_pipeline_main(
+        mocker, subfinder_hosts=[], triage_side_effect=_triage
+    )
+    with pytest.raises(SystemExit) as exc:
+        main()
+    assert seen["handler"] is sc._on_sigterm
+    assert exc.value.code == 130
+    upload.assert_called_once()
+    assert meta.call_args[0][-1] == "cancelled"
+
+
+def test_cancelled_scan_skips_triage(mocker):
+    import bounty_scanner.scanner as sc
+
+    mocker.patch("sys.argv", _ARGV)
+    mocker.patch("bounty_scanner.scanner.load_program_scope", return_value=_program_scope())
+    mocker.patch("bounty_scanner.scanner.subprocess.run", side_effect=KeyboardInterrupt)
+    triage = mocker.patch("bounty_scanner.scanner.triage_findings")
+    mocker.patch("bounty_scanner.scanner.upload_to_s3", return_value=True)
+    meta = mocker.patch("bounty_scanner.scanner.upload_scan_metadata", return_value=True)
+    with pytest.raises(SystemExit) as exc:
+        main()
+    assert exc.value.code == 130
+    triage.assert_not_called()
+    assert meta.call_args[0][-1] == "cancelled"
+
+
+def test_sigint_in_body_propagates_without_generator_runtimeerror(mocker):
+    """Regression: a KeyboardInterrupt thrown into the body used to be caught
+    and re-yielded ('generator didn't stop after throw()')."""
+    mocker.patch(
+        "bounty_scanner.scanner.subprocess.run",
+        side_effect=_make_subprocess_side_effect([], {"subfinder": []}),
+    )
+    with pytest.raises(KeyboardInterrupt):
+        with run_recon_pipeline("example.com", PERMISSIVE_RULES, TEST_UA, {}):
+            raise KeyboardInterrupt
+
+
+def test_sigterm_before_arming_cancels_before_any_tool_runs(mocker):
+    import bounty_scanner.scanner as sc
+
+    run = mocker.patch("bounty_scanner.scanner.subprocess.run")
+    mocker.patch.object(sc, "_cancel_requested", True)
+    with run_recon_pipeline("example.com", PERMISSIVE_RULES, TEST_UA, {}) as artifacts:
+        assert artifacts.scan_status == "cancelled"
+    run.assert_not_called()
+
+
+def test_pipeline_error_then_sigterm_in_body_keeps_partial_status(mocker):
+    """After a stage failure the generator has yielded; a SIGTERM in the body
+    only sets the flag and must not change the partial status."""
+    import bounty_scanner.scanner as sc
+
+    mocker.patch(
+        "bounty_scanner.scanner.subprocess.run",
+        side_effect=_fail_after_subfinder(subprocess.CalledProcessError(1, "httpx")),
+    )
+    with run_recon_pipeline("example.com", PERMISSIVE_RULES, TEST_UA, {}) as artifacts:
+        sc._on_sigterm(15, None)  # disarmed: no raise
+        assert artifacts.scan_status == "partial"
+
+
+def test_sigterm_during_pipeline_stage_raises_to_abort_it(mocker):
+    import bounty_scanner.scanner as sc
+
+    def _run(argv, **kwargs):
+        sc._on_sigterm(15, None)  # armed: raises KeyboardInterrupt
+
+    mocker.patch("bounty_scanner.scanner.subprocess.run", side_effect=_run)
+    with run_recon_pipeline("example.com", PERMISSIVE_RULES, TEST_UA, {}) as artifacts:
+        assert artifacts.scan_status == "cancelled"
+    assert sc._raise_on_cancel is False  # disarmed after the pipeline
+
+
+def test_failed_s3_upload_downgrades_success_to_failed(mocker):
+    upload, meta = _real_pipeline_main(mocker, subfinder_hosts=[], s3_ok=False)
+    with pytest.raises(SystemExit) as exc:
+        main()
+    assert exc.value.code == 1
+    assert meta.call_args[0][-1] == "failed"
+
+
+def test_main_restores_previous_sigterm_handler(mocker):
+    import signal
+
+    before = signal.getsignal(signal.SIGTERM)
+    _real_pipeline_main(mocker, subfinder_hosts=[])
+    with pytest.raises(SystemExit):
+        main()
+    assert signal.getsignal(signal.SIGTERM) is before
