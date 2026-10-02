@@ -15,6 +15,7 @@
 # ── identity ─────────────────────────────────────────────────────────────────
 repo: glunk-works/bounty-infra
 pr_base: main
+migration_base: null
 
 # ── the deep record ──────────────────────────────────────────────────────────
 roadmap: docs/hardening_roadmap.md
@@ -33,6 +34,10 @@ backlog:
   kind: github_issues              # this repo has no backlog file; findings are issues.
   path: null
   item_prefix: null
+  repo: null
+
+planning:
+  kind: "github_milestones"
 
 # docs-consistency's audit set. README.md is deliberately absent: CLAUDE.md already records
 # that it predates the current architecture and is not trusted over the roadmap, so auditing
@@ -85,3 +90,4 @@ agents:
 models:
   architect: opus
   coder: sonnet
+  second_opinion: "fable"
