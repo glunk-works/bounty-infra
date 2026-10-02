@@ -3,36 +3,26 @@
 Thin, live cursor for whoever picks up this repo next. Points into the deep record — it does
 not copy it. Regenerate this at the end of every working session.
 
-## Now
+**Now:** S3 — MVP thin slice, `implementing`, due Fri 2026-10-30 (replanned 2026-10-02). The
+plan is the milestone description's numbered build order (BI-D19), not issue-number order.
 
-**S3 — MVP thin slice is the active sprint.** Planned 2026-09-11, **due Wed 2026-09-16**.
-**The sprint plan is the GitHub milestone, not a local file (BI-D19):**
-https://github.com/glunk-works/bounty-infra/milestone/1 — work its open issues in number order
-(#98 upward). Decisions BI-D14..D20 are recorded in `docs/hardening_roadmap.md` (#100).
+**Just done (2026-10-02):**
+- Replanned S3 (plan-sprint): new due date; the description is now the operator gates, a
+  14-step build order, the fallback line (#118/#119 drop first) and four BLOCKING items.
+- Changes from the proposed order: #111 and #107 moved ahead of their producers/consumers,
+  #105 added (recon-only finds nothing without it), #103 → #104 moved ahead of
+  agents/governance (external dependency on global-bootstrap#13).
+- Closed #98 and #92 as superseded (pin verified by SHA: `40d1a82` = `v0.15.0`); moved #151
+  to SG.
+- First anchor for milestone 1, description sha `e4d52042b47bdaea7a038028f4b6e457a134efc0c234348cc2c13ef50a4661bb`.
 
-Fallback line: if Tuesday looks bad, #118 (operator read path) and #119 (DefectDojo) drop
-first; the persona registry (#112), governance mapping (#115), runbooks (#116) and the live
-scan (#117) are the demo.
+**Next:** task #110 — implement the exit-code contract (closes #14); PR #89 is input only.
+Model: `sonnet` (coder). **HITL Gate: OPEN** — first anchor for S3: a human "go" at
+`/way-of-working:resume` confirms the replanned build order before #110 starts. Operator gates
+(parallel, a coder cannot do these): #102, #101, global-bootstrap#13 applied locally, #105's
+source keys into Infisical.
 
-## Just done (2026-09-11)
-
-- Verified build status: local green gate and CI on `main` both green; PR #97 merged.
-- Planning pass, one question at a time, then a self-critique that changed four design points
-  (GitHub Environment approval instead of Slack reaction polling; IAM grants verified day one;
-  personas repo-local, not in the plugin; loop-orchestrator-vs-SDK left as a spike).
-- Created milestones S3, S4, S5, SG, S6, S7 and issues #98–#151; attached the older open
-  issues (#8 #10 #12 #14 #18 #76 #79 #82 #83 #84 #86 #87 #92) to milestones. S2 is dissolved
-  into S3/SG.
-- Cross-repo issues: global-bootstrap #13–#16 (grants, roles, Object Lock), claude-workbench
-  #86 (`planning:` schema key), loop-orchestrator #204 and scope-core #3 (repo hygiene).
-
-## Still-open operator gates (a coder cannot do these)
-
-- #102 HackerOne API token into Infisical · #101 verification dispatch · #117 first live scan ·
-  global-bootstrap #13 applied locally before #103 can run for real.
-
-## Pointers
-
-- Milestones: https://github.com/glunk-works/bounty-infra/milestones
+**Pointers:**
 - `docs/hardening_roadmap.md` — decisions BI-D1..D20 and the known-gap register.
+- Sprint plan: https://github.com/glunk-works/bounty-infra/milestone/1
 - `sprints/*/sprint_plan.md` — historical (S0–SW). No S2/S3 plan file exists by design.
