@@ -14,7 +14,9 @@
       "extensions": [
         "ms-python.python",
         "charliermarsh.ruff",
-        "hashicorp.terraform"
+        "hashicorp.terraform",
+        "github.vscode-github-actions",
+        "anthropic.claude-code"
       ]
     }
   },
