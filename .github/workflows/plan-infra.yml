@@ -1,38 +1,64 @@
 name: "1a. Plan Infrastructure"
 
-# The visible half of the BI-D2 gate: every PR shows what an apply would do to AWS,
-# and `tofu-plan` is a required check on `main`, so nothing reaches infra unreviewed.
+# The visible half of the BI-D2 gate: every PR that touches infra shows what an
+# apply would do, and `tofu-plan` is a required check on `main`, so nothing
+# reaches infra unreviewed.
 #
-# NO `paths:` FILTER — deliberate. A required check on a path-filtered workflow
-# deadlocks: a PR touching only `docs/` never triggers the workflow, so the required
-# check sits pending forever and the PR can never merge. The job therefore runs on
-# every PR and decides internally whether there is anything to plan.
+# NO CREDENTIAL BEFORE APPROVAL (BI-D23, #179). A PR's code is unreviewed --
+# and once the dev App opens PRs here, model-written -- so the job that runs
+# `tofu init`/`plan` on it holds no OIDC role and no secret until a maintainer
+# approves it. Three jobs:
+#   - `detect` holds no cloud credential or secret, and decides whether infra
+#     changed;
+#   - `credentialed-plan` runs only when it did, on the `infra-plan`
+#     Environment (required reviewers, no admin bypass), and is the only job
+#     with `id-token: write`. Its inputs are that Environment's secrets, which
+#     GitHub releases only after the approval;
+#   - `tofu-plan` always runs, even on cancellation, and reports the outcome.
+#     Its job id IS the required-check context.
+# The plan role (`github-actions-bounty-infra-plan`, global-bootstrap) trusts
+# the `environment:infra-plan` subject. Once this workflow is on `main`, the two
+# `:pull_request`-bound identities left from the old plan path are retired
+# together: that subject on the plan role (a global-bootstrap change) and the
+# Infisical plan identity (`vars.PLAN_IDENTITY_ID`, which could read the Vultr
+# key). Those removals are the real control, not this file: a `pull_request`
+# run uses the PR's own copy of the workflow, so anyone able to edit a workflow
+# could drop the `environment:` line. Until then, BI-D22 conditions 2 and 3
+# bound who that is.
 #
-# READ-ONLY CREDENTIALS, deliberately distinct from the apply path. A plan is a
-# read operation and a PR is unreviewed code, so this job must never hold the
-# apply role. It uses its own Infisical identity (`vars.PLAN_IDENTITY_ID`, scoped to
-# the `repo:glunk-works/bounty-infra:pull_request` OIDC subject) and its own AWS role
-# (`AWS_PLAN_ROLE_ARN`, read-only). `deploy-infra.yml` keeps `AWS_OIDC_ROLE_ARN`,
-# whose Infisical identity must stay scoped to the `main` ref subject — do NOT
-# broaden it to `pull_request`, or opening a PR silently grants apply-capable
-# credentials with no approval, re-opening #9 through the side door.
+# NO SECRET VALUES IN THE PLAN (BI-D23). The plan runs `-refresh=false` with a
+# placeholder Vultr key, so it holds no Vultr credential and no Infisical
+# identity. It compares config to state; it does not show drift, and nothing
+# else shows it before it is applied: `deploy-infra.yml` applies with refresh
+# and -auto-approve after its approval, so a drift correction lands unseen
+# (accepted in BI-D23). If a Vultr data source is ever added to infra/, the plan
+# fails with a 401 rather than passing quietly, because data sources are read
+# even with -refresh=false -- revisit BI-D23 then.
+#
+# NO `paths:` FILTER -- deliberate. A required check on a path-filtered workflow
+# deadlocks: a PR touching only `docs/` never triggers the workflow, so the
+# required check sits pending forever and the PR can never merge. `detect`
+# decides internally whether there is anything to plan instead.
+#
+# APPLY CREDENTIALS NEVER APPEAR HERE. `deploy-infra.yml` keeps the apply role,
+# behind the `production` Environment.
 
 on:
   pull_request:
 
-permissions:
-  contents: read
-  id-token: write
+permissions: {}
 
 concurrency:
   group: tofu-plan-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  # Job id IS the required-check context. Never add a `name:` override here —
-  # it renames the check run and silently un-requires the gate.
-  tofu-plan:
+  detect:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      infra: ${{ steps.changes.outputs.infra }}
     steps:
       - name: Checkout Source Code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -41,8 +67,6 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      # Step-level `if:` below, not a job-level `if:` — the job always runs and always
-      # reports a conclusion, which is what keeps the required check from stranding.
       - name: Detect infra changes
         id: changes
         env:
@@ -54,75 +78,87 @@ jobs:
             echo "infra=true" >> "$GITHUB_OUTPUT"
           else
             echo "infra=false" >> "$GITHUB_OUTPUT"
-            echo "No changes under infra/ — nothing to plan." >> "$GITHUB_STEP_SUMMARY"
+            echo "No changes under infra/ or the infra workflows — nothing to plan." >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      - name: Fetch Pipeline Secrets from Infisical
-        if: steps.changes.outputs.infra == 'true'
-        uses: Infisical/secrets-action@77ab1f4ccd183a543cb5b42435fbd181189f4995 # v1.0.16
+  credentialed-plan:
+    needs: detect
+    if: needs.detect.outputs.infra == 'true'
+    runs-on: ubuntu-latest
+    # The approval gate. Presenting this Environment is what makes the job's
+    # OIDC subject `environment:infra-plan`, which the plan role trusts (see the
+    # header for when `:pull_request` stops being trusted too). The timeout runs
+    # from the approval, not from the wait for it.
+    environment: infra-plan
+    timeout-minutes: 20
+    permissions:
+      contents: read # checkout
+      id-token: write # OIDC token for the plan role; the only job in this workflow that holds one
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          method: "oidc"
-          identity-id: ${{ vars.PLAN_IDENTITY_ID }}
-          oidc-audience: ${{ github.server_url }}/${{ github.repository }}
-          env-slug: "prod"
-          project-slug: "pipeline-secret-store"
-          secret-path: "/bounty-infra"
+          persist-credentials: false
 
       - name: Configure AWS Credentials
-        if: steps.changes.outputs.infra == 'true'
         uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
         with:
-          # Read-only role — NOT the apply role. See the header note.
-          role-to-assume: ${{ env.AWS_PLAN_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
+          # Read-only plan role -- NOT the apply role. An Environment secret, not
+          # a `vars.` value: the ARN embeds the account ID, and a vars value
+          # passed through `with:` prints unmasked in a public log (BI-D4).
+          role-to-assume: ${{ secrets.AWS_PLAN_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          # Error output (an AccessDenied, a backend error) can carry the bare
+          # account ID, which the secret mask does not cover (BI-D4).
+          mask-aws-account-id: true
 
       # tofu_wrapper: false -- the default wrapper normalizes -detailed-exitcode's
       # 0 (no changes) AND 2 (changes present) to the same process exit 0 (see
       # opentofu/setup-opentofu's wrapper/tofu.js: `if (exitCode === 0 ||
       # exitCode === 2) { return; }`), so a script reading raw `$?` -- as the
-      # next step does -- can never tell the two apart. The action's own docs
-      # flag this exact symptom. This predates SE; it just never manifested
-      # before because no prior PR introduced a real infra/ diff to detect.
+      # next step does -- can never tell the two apart.
       - name: Setup OpenTofu Core
-        if: steps.changes.outputs.infra == 'true'
         uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
         with:
           tofu_version: 1.13.0
           tofu_wrapper: false
 
       - name: OpenTofu plan
-        if: steps.changes.outputs.infra == 'true'
         working-directory: ./infra
+        env:
+          TF_STATE_BUCKET: ${{ secrets.TF_STATE_BUCKET }}
+          AWS_REGION: ${{ vars.AWS_REGION }}
         run: |
           set -euo pipefail
 
+          # No dynamodb_table: the plan runs -lock=false and the plan role holds
+          # no DynamoDB grant (BI-D23). A plan must never block a concurrent
+          # apply on the state lock.
           tofu init -input=false \
             -backend-config="bucket=${TF_STATE_BUCKET}" \
-            -backend-config="region=${AWS_REGION}" \
-            -backend-config="dynamodb_table=${TF_STATE_LOCK_TABLE}"
+            -backend-config="region=${AWS_REGION}"
 
-          # BI-D4: the plan body renders the account ID, real bucket names, subnet/SG
-          # IDs and ARNs at runtime even though none are committed. On a PUBLIC repo
-          # both PR comments and workflow artifacts are world-readable, so the body
-          # goes to a file that is never printed and never uploaded — only resource
-          # ADDRESSES and change COUNTS are published, by the next step.
-          # -lock=false: a plan must never block a concurrent apply on the state lock.
+          # BI-D4: the plan body renders account-specific values at runtime even
+          # though none are committed. On a PUBLIC repo both PR comments and
+          # workflow artifacts are world-readable, so the body goes to a file
+          # that is never printed and never uploaded -- only resource ADDRESSES
+          # and change COUNTS are published, by the next step.
+          #
+          # BI-D23: -refresh=false and an obviously fake Vultr key. Verified for
+          # #179 that no Vultr API call is made this way, and that the plan
+          # matches a refreshed real-key plan against main's state.
           set +e
-          tofu plan -input=false -lock=false -no-color -detailed-exitcode \
+          tofu plan -input=false -lock=false -refresh=false -no-color -detailed-exitcode \
             -out=tfplan.bin \
             -var="aws_region=${AWS_REGION}" \
-            -var="findings_bucket_name=${FINDINGS_BUCKET_NAME}" \
-            -var="kms_key_arn=${KMS_KEY_ARN}" \
-            -var="vultr_api_key=${VULTR_API_KEY}" \
+            -var="vultr_api_key=plan-placeholder-not-a-key" \
             >plan.stdout 2>plan.stderr
           CODE=$?
           set -e
 
           # -detailed-exitcode: 0 = no changes, 2 = changes present, anything else = error.
           # Log the code itself: it is the one bit of plan outcome that is safe to
-          # print (a state, not a value), and without it a green check is
-          # indistinguishable from a green check with pending changes anywhere
-          # except the step summary, which no API exposes.
+          # print (a state, not a value).
           echo "tofu plan exit code: ${CODE} (0 = no changes, 2 = changes present)"
 
           if [ "$CODE" -ne 0 ] && [ "$CODE" -ne 2 ]; then
@@ -132,7 +168,6 @@ jobs:
           fi
 
       - name: Summarize plan (addresses + counts only)
-        if: steps.changes.outputs.infra == 'true'
         working-directory: ./infra
         run: |
           set -euo pipefail
@@ -143,11 +178,12 @@ jobs:
             echo
             echo "_Resource addresses and change counts only — the plan body is withheld"
             echo "because it renders account-specific values into a world-readable log (BI-D4)._"
+            echo "_Planned with -refresh=false (BI-D23): config against state, not drift._"
             echo
             jq -r '
               [.resource_changes[]? | select(.change.actions | index("no-op") | not)]
               | if length == 0 then
-                  "**No changes.** Infrastructure matches configuration."
+                  "**No changes.** State matches configuration."
                 else
                   ("| Action | Address |", "|---|---|"),
                   (.[] | "| `\(.change.actions | join(","))` | `\(.address)` |"),
@@ -160,3 +196,36 @@ jobs:
           # Nothing here is uploaded as an artifact; removed anyway so a later step
           # cannot casually pick them up. tfplan.bin embeds full resource values.
           rm -f tfplan.bin plan.json plan.stdout plan.stderr
+
+  # Job id IS the required-check context. Never add a `name:` override here --
+  # it renames the check run and silently un-requires the gate.
+  tofu-plan:
+    needs: [detect, credentialed-plan]
+    # always(), not the default and not !cancelled(): with plain `needs`, a
+    # failed `detect` would SKIP this job, and a skipped required check counts
+    # as passing; with !cancelled(), a cancelled run could skip it the same way.
+    # So this job always runs and passes only on an explicit success.
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Report the plan outcome
+        env:
+          DETECT: ${{ needs.detect.result }}
+          INFRA: ${{ needs.detect.outputs.infra }}
+          PLAN: ${{ needs.credentialed-plan.result }}
+        run: |
+          set -euo pipefail
+          if [ "$DETECT" != "success" ]; then
+            echo "::error::detect did not succeed (${DETECT}), so whether infra changed is unknown."
+            exit 1
+          fi
+          if [ "$INFRA" = "true" ]; then
+            if [ "$PLAN" != "success" ]; then
+              echo "::error::Infra changed and credentialed-plan did not succeed (${PLAN}). It needs an approval on the infra-plan Environment; a rejected or failed plan fails this check."
+              exit 1
+            fi
+            echo "Infra changed; the approved plan succeeded."
+          else
+            echo "No infra change; nothing to plan."
+          fi

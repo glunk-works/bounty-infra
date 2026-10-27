@@ -23,13 +23,14 @@ per-domain-scoped S3-write session (SE-MG2; the writer role and its trust policy
 and an optional, off-by-default reserved IP (SE-MG5) — the AWS VPC/ECS/ECR half is fully
 retired. Zero ingress on the scan VM; every account-specific value resolves at runtime
 through Infisical (`env.AWS_OIDC_ROLE_ARN`, `env.TF_STATE_BUCKET`, `vars.IDENTITY_ID`,
-`VULTR_API_KEY`) or tofu variables.
+`VULTR_API_KEY`), tofu variables, or — for the PR-time plan only — the `infra-plan`
+Environment (BI-D23).
 
 > **This repo is under active hardening — read the roadmap before extending it.**
 > [`docs/hardening_roadmap.md`](docs/hardening_roadmap.md) is the reference of record:
 > the sprint sequence (S0 governance → S1 scanner security → S3–S7, which are GitHub
 > milestones, plus **SG** CI gates and **SE** egress migration; S2 was dissolved into S3/SG),
-> and the locked decisions (**BI-D1..BI-D20**).
+> and the locked decisions (**BI-D1..BI-D23**).
 >
 > **The compute-model migration (BI-D5) is DONE as of SE Phase 2:** scan egress runs on
 > per-scan ephemeral Vultr VMs; AWS is control-plane only. Any new AWS compute/networking
@@ -55,6 +56,12 @@ the same name. Both rules, and why, are in the plugin's `reference/project-schem
 - **No infra change reaches AWS without a visible plan and a human approval** (BI-D2):
   `tofu plan` on PRs touching `infra/**`, apply on merge-to-main behind the protected
   `production` Environment. `-auto-approve` is allowed *only* post-approval.
+- **A PR's plan gets no credential before a human approves it** (BI-D23): the credentialed
+  plan job sits on the `infra-plan` Environment, and once the old `:pull_request`-bound
+  identities are retired (the plan role's subject and the Infisical plan identity), the
+  Environment's subject is the only way in. The plan holds no secret value either: it runs
+  `-refresh=false` with a placeholder Vultr key, so never give it the real key or a
+  SecureString read.
 - **`tofu plan` output is summarized, never dumped** (BI-D4). Plan renders the account ID,
   bucket names, and subnet/SG IDs at runtime even though none are committed, and on a
   public repo both PR comments *and* workflow artifacts are world-readable. Emit change
@@ -123,16 +130,17 @@ hatch run lint:fmt        # (from ./src) ruff format + ruff check --fix
 hatch build               # (from ./src) wheel
 ```
 
-A real `tofu plan`/`apply` additionally needs Infisical-sourced backend config
+A real `tofu apply` additionally needs Infisical-sourced backend config
 (`-backend-config="bucket=…"`, `region`, `dynamodb_table`) and the assumed OIDC role — it
-does not run cleanly from a laptop by design.
+does not run cleanly from a laptop by design. The PR-time plan takes `bucket` and `region`
+from the `infra-plan` Environment instead, and no lock table (BI-D23).
 
 ## Pointers (load on demand)
 
 - **`.ai/next-steps.md`** — the live cursor: current sprint/task, next action, which model.
   Read this first.
 - **`.ai/project.yml`** — this repo's parameterization of the working method.
-- **`docs/hardening_roadmap.md`** — reference of record: posture, BI-D1..D20, sprint
+- **`docs/hardening_roadmap.md`** — reference of record: posture, BI-D1..D23, sprint
   sequence, the known-gap register, public-repo rules, cross-repo coupling. Also serves as the
   threat model.
 - **`sprints/*/sprint_plan.md`** — the per-sprint plans (S0, S1, SC, SW).

@@ -514,6 +514,139 @@ explicit, with the owner's confirmation, when these entries were written (#100).
   adopted in loop-orchestrator instead, where nothing exists yet. **Active ZAP scans** — too
   noisy against bounty targets to stay inside program policy.)
 
+## Locked decisions (CI credentials before the dev App, 2026-10-27, owner-confirmed)
+
+Decided for #179, the CI-credentials precondition of the way-of-working cutover
+(claude-workbench #406): once the dev App opens PRs here, a PR's code is model-written and
+runs in CI before any human approves it.
+
+- **BI-D22 (2026-10-27) — the apply role's `main`-ref trust is an accepted gap, under three
+  conditions.** `github-actions-bounty-infra` is the apply role (`deploy-infra.yml`,
+  `environment: production`), but it also trusts `repo:glunk-works/bounty-infra:ref:refs/heads/main`,
+  because `run-scan.yml` assumes it. That workflow runs on `workflow_dispatch` with free inputs,
+  and its scan job stays on the branch subject even after #106 (BI-D16 puts the `scan-approval`
+  Environment on a credential-less `approve` job precisely so the scan job's subject does not
+  change). So anyone who can dispatch a workflow on `main` gets the apply role. Dispatching on any
+  other branch presents `ref:refs/heads/<branch>`, which the role does not trust. Since #181 the
+  role holds only bounty-infra's state access and `sts:AssumeRole` into `bounty-scanner-s3-writer`,
+  so that is the gap's whole reach: bounty-infra's state and the scanner writer role. The gap is
+  accepted only while all three conditions hold. Each is checked by reading live state:
+  1. **The approval ruleset is live on `main` with no bypass actor.** So any workflow running
+     under the `main`-ref subject is code that a code owner other than its author and last pusher
+     approved. Read back: `gh api repos/glunk-works/bounty-infra/rules/branches/main` shows the
+     approval ruleset's `pull_request` rule, and each ruleset, read as an admin, shows
+     `enforcement: active` and `bypass_actors: []`.
+  2. **No App installed on the repo holds Actions write or Workflows write.** Actions write lets
+     a token dispatch `run-scan.yml` directly. Workflows write gets there one step later: the App
+     pushes a branch carrying a workflow of its own; a run on that branch (`push` or
+     `pull_request`) uses the branch's copy, before any approval, grants its `GITHUB_TOKEN`
+     `actions: write`, and dispatches on `main`. The dev
+     App holds Actions read and no Workflows permission (WB-D24). Read back, as an org owner:
+     `gh api orgs/glunk-works/installations` for each installation's permissions. For which
+     installations include this repo, use Settings → GitHub Apps on the repo, since the API does
+     not list a selected-repo installation's repositories to an OAuth token.
+  3. **Only the maintainer accounts, Seuss27 and JaredGroves-603, hold write or higher, and no
+     deploy key has write.** Any account with write can dispatch. A deploy key with write can
+     push a branch carrying its own workflow, which reaches `main` by condition 2's path. Read
+     back, as an admin:
+     `gh api repos/glunk-works/bounty-infra/collaborators --jq '.[] | [.login, .role_name] | @tsv'`,
+     plus `gh api repos/glunk-works/bounty-infra/invitations`, since an accepted invitation is
+     new access, plus `gh api repos/glunk-works/bounty-infra/keys --jq '.[] | [.title, .read_only] | @tsv'`
+     with every row reading `true` (on 2026-10-27 there are none). The collaborators endpoint's default affiliation, `all`, includes access through
+     teams and the org's base permission; `?affiliation=direct` does not, so never check with the
+     direct list. On 2026-10-27 the two lists match, but only because no team has access and the
+     base permission is `read`. That is luck, not a property.
+
+  **When the gap stops being acceptable:** if a change would break any of the three conditions,
+  the role split lands before that change, not after it. Examples: adding a bypass actor,
+  installing an App with Actions or Workflows write (glunk-admin included, even for an admin-mode
+  window), or giving another account write. The split gives `run-scan.yml` its own role, trusted
+  on the `main`-ref subject with only the scan path's grants, and the apply role then trusts
+  `environment:production` alone. It is a global-bootstrap change plus `run-scan.yml`'s role ARN,
+  tracked in #182. (Rejected: **split the role now, before the cutover** — under the
+  three conditions, it does not change what unapproved code can reach, which is the threat #179
+  closes. **Exempt the slack
+  App from condition 2** — a third-party App with Actions and Workflows write on every repo is
+  exactly what the condition exists to exclude, so bounty-infra comes off its installation
+  instead.)
+
+- **BI-D23 (2026-10-27) — the PR-time plan gets credentials only after approval, and no secret
+  values.**
+  - **The job shape.** `plan-infra.yml` has three jobs:
+    - `detect` holds no cloud credential or secret, and decides whether infra changed;
+    - `credentialed-plan` runs only when it did, on the `infra-plan` Environment (required
+      reviewers, no admin bypass), and is the only job with `id-token: write`;
+    - `tofu-plan`, the required context (job id, no `name:` override), runs on `always()`, even
+      when the run is cancelled. It passes only if `detect` succeeded and, when infra changed,
+      `credentialed-plan` succeeded. It never relies on a skip, because a skipped required check
+      counts as passing.
+  - **The Environment.** Its safety rests on four settings:
+    - required reviewers Seuss27 and JaredGroves-603;
+    - `can_admins_bypass: false`;
+    - no deployment-branch policy, because PR jobs run on `refs/pull/<N>/merge`;
+    - `prevent_self_review` stays off. The Environment exists so a human approves model-written
+      code before it gets credentials, and a run a maintainer triggers is already
+      human-triggered. It would not stop a compromised Seuss27, an admin who could turn it off.
+      And it adds friction on re-runs, whose re-runner becomes the triggering actor. The merge
+      side's last-push rule is different: it sits in a ruleset with no bypass actor, so it does
+      hold against a single account;
+    - it is created before global-bootstrap trusts `environment:infra-plan`, because GitHub
+      creates a missing Environment on first use, with no protection rules.
+  - **The trust.** The plan role (`github-actions-bounty-infra-plan`, global-bootstrap) trusts
+    `environment:infra-plan`. Two `:pull_request`-bound identities remain from the old plan
+    path. Both are retired in one cleanup step once the workflow PR has merged, with one
+    read-back covering both:
+    - the plan role's `:pull_request` subject, removed by a second global-bootstrap change;
+    - the Infisical plan identity (`vars.PLAN_IDENTITY_ID`), bound to the same subject and able
+      to read Infisical `prod` `/bounty-infra`, the Vultr key included. It is deleted in
+      Infisical, and the repo variable with it. Deleting only the variable does nothing: its
+      value is not secret and is printed in past public plan logs.
+
+    Those removals are the control, not the workflow file. A `pull_request` run uses the PR's
+    own copy of the workflow, so anyone able to edit a workflow could drop the `environment:`
+    line or call either identity directly. Until both are retired, what bounds that is BI-D22's
+    conditions 2 and 3: only the maintainers can edit a workflow.
+  - **Approving runs the PR's code with the plan session.** An approved plan runs whatever the
+    PR's HCL, providers and workflow steps do: a `pull_request` run uses the PR's own copy of
+    `plan-infra.yml`, and of any other workflow the PR puts on `infra-plan`. It holds the plan
+    role's read-only state session, and it can mint further OIDC tokens for the
+    `environment:infra-plan` subject, so nothing but the plan role may ever trust that
+    subject. Read the PR's `infra/`, provider and `.github/workflows/` changes before
+    approving the `infra-plan` deployment.
+  - **The inputs.** The plan job reads the `infra-plan` Environment's secrets (role ARN, state
+    bucket) and a region variable, released only after approval. There is no lock table: the
+    plan runs `-lock=false`, the plan role holds no DynamoDB grant, and `tofu init` omits
+    `dynamodb_table`. Infisical leaves the plan path and `PLAN_IDENTITY_ID` retires. The
+    unreferenced `findings_bucket_name` and `kms_key_arn` variables are deleted.
+  - **No Vultr key.** The plan runs `tofu plan -refresh=false` with the placeholder
+    `plan-placeholder-not-a-key`. Verified on 2026-10-27 (#179):
+    - no Vultr API request is made (a debug-log check, with a positive control showing one
+      would be logged);
+    - a Vultr data source fails the plan with a 401, so the property fails closed;
+    - gitleaks passes the placeholder;
+    - against `main`'s real state (`2dce0d7`, run by the maintainer on the host, never in CI),
+      the placeholder plan matched a refreshed plan run with the real key: both exited 0 with
+      no resource or output changes. With no drift, that agreement is all this check can show.
+      Drift is the cost below.
+  - **The provider version.** The local checks ran on vultr 2.32.0. `infra/` does not lock
+    provider versions, so CI can run a newer 2.x. That stays safe because the property fails
+    closed: if a later provider called the API at startup, the placeholder key would get a 401
+    and fail the plan.
+  - **The cost.** A PR plan compares config to state; it does not show drift. Before this
+    decision the PR plan refreshed, so a drift correction showed up at review. Now it does not
+    show anywhere before it happens: `deploy-infra.yml`'s `production` approval comes before its
+    job starts, and the job then applies with refresh and `-auto-approve`, publishing only a
+    count afterwards. So a resource changed outside OpenTofu is silently restored by the next
+    apply. That is accepted here, because `infra/` holds two small Vultr resources; #184 is
+    the follow-up that makes drift visible before an apply. Adding a Vultr data source to
+    `infra/`, or a resource whose drift matters, reopens this decision.
+
+  (Rejected: **an Environment on `tofu-plan` itself** — it asks for approval on every PR,
+  docs-only ones included. **Allow the plan role one SecureString read for the key, recorded
+  here** — an approved PR's code could copy out a Vultr key that controls the whole account, and
+  it would tie this gate to the Infisical-to-SSM migration (#168). **A read-only Vultr
+  credential** — not verified to exist for firewall groups and reserved IPs.)
+
 ## Known-gap register
 
 Where the pipeline falls short of what BI-D18's frameworks expect, recorded rather than implied
