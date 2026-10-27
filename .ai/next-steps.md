@@ -31,6 +31,6 @@ global-bootstrap#18 applied (gates #168), #102/#105/#107 secrets into SSM, #101,
 global-bootstrap#13 applied locally.
 
 **Pointers:**
-- `docs/hardening_roadmap.md` — decisions BI-D1..D20 and the known-gap register.
+- `docs/hardening_roadmap.md` — decisions BI-D1..D23 (BI-D21 reserved by #127) and the known-gap register.
 - Sprint plan: https://github.com/glunk-works/bounty-infra/milestone/1
 - `sprints/*/sprint_plan.md` — historical (S0–SW). No S2/S3 plan file exists by design.
