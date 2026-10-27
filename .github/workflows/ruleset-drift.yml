@@ -13,8 +13,12 @@ name: Ruleset drift
 #     stale reviews dismissed on push, last-push approval and at least one
 #     approval, plus `deletion` and `non_fast_forward`;
 #   - the CHECKS ruleset: the 8 required checks below, every one pinned to
-#     the GitHub Actions integration (integration_id 15368), so no other token
-#     holding `statuses: write` can satisfy them;
+#     the GitHub Actions integration (integration_id 15368), so only this
+#     repo's own workflows can satisfy them, never another App or a personal
+#     token; who can add or edit a workflow is BI-D22 condition 2's concern.
+#     "Every check pinned to 15368" is stricter than the runbook, which pins
+#     each check to the App that posts it: a future required check posted by
+#     another App needs a deliberate edit here, not a reading as drift;
 #   - no `update` rule: with no bypass actor allowed, one blocks every merge.
 #
 # The rulesets are named by role, not by name: `rules/branches/main` merges
