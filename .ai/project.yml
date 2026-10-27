@@ -87,7 +87,14 @@ review:
 # spawned subagent runs as — an agent's model comes from its own frontmatter upstream.
 agents:
   enabled: [architect, coder, security-critic, docs-consistency]
+  diff_rule: null                # null means critic-gate's diff mode proposes and the human picks.
 models:
   architect: opus
   coder: sonnet
   second_opinion: "fable"
+
+# ── the sprint-orchestrator loop ─────────────────────────────────────────────
+orchestration: null              # null means the loop never dispatches into this repo.
+
+# ── declared identities ──────────────────────────────────────────────────────
+identities: null                 # null until the cutover's PR 1 replaces it with the map.
