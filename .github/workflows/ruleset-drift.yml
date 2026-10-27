@@ -1,12 +1,32 @@
 name: Ruleset drift
 
 # T3(e), ported from loop-orchestrator's ruleset-drift.yml. Every "required"
-# check in this repo blocks a merge only because the
-# `protected-integration-branches` ruleset says so — its total absence went
-# unseen for this repo's entire life until 2026-07-19. This workflow re-reads
-# the effective rules on `main` on a schedule (plus workflow_dispatch, since a
-# cron-only trigger cannot be tested without waiting for the cron) and fails
-# loudly the moment they no longer match what S0 put in place.
+# check in this repo blocks a merge only because a ruleset says so — the
+# original ruleset's total absence went unseen for this repo's entire life
+# until 2026-07-19. This workflow re-reads the effective rules on `main` on a
+# schedule (plus workflow_dispatch, since a cron-only trigger cannot be tested
+# without waiting for the cron) and fails loudly the moment they no longer
+# match the shape the way-of-working cutover put in place
+# (glunk-works/claude-workbench#406):
+#
+#   - the APPROVAL ruleset: a `pull_request` rule with code-owner review,
+#     stale reviews dismissed on push, last-push approval and at least one
+#     approval, plus `deletion` and `non_fast_forward`;
+#   - the CHECKS ruleset: the 8 required checks below, every one pinned to
+#     the GitHub Actions integration (integration_id 15368), so no other token
+#     holding `statuses: write` can satisfy them;
+#   - no `update` rule: with no bypass actor allowed, one blocks every merge.
+#
+# The rulesets are named by role, not by name: `rules/branches/main` merges
+# every active ruleset into one list, and this check reads that list. Where
+# two rulesets both carry a `pull_request` rule GitHub applies the strictest
+# combination, so it is enough that ONE of them carries the approval shape.
+# A ruleset switched to `evaluate` drops out of that list, so it reads here as
+# missing rules and fails — the intended outcome.
+#
+# What this CANNOT check: bypass actors. `rules/branches/main` does not list
+# them and GITHUB_TOKEN cannot read them, so "no bypass actor on either
+# ruleset" is verified only by an admin read-back (BI-D22, condition 1).
 #
 # Deliberately NOT a required check and NOT a job in ci.yml (loop-orchestrator
 # FD2): a required check is required only because the ruleset says so, so
@@ -26,7 +46,7 @@ jobs:
   ruleset-drift:
     runs-on: ubuntu-latest
     steps:
-      - name: Verify the protected-integration-branches ruleset still holds
+      - name: Verify the approval and checks rulesets still hold
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
@@ -34,11 +54,14 @@ jobs:
           set -euo pipefail
 
           rules=$(gh api "repos/${REPO}/rules/branches/main")
+          jq -e 'type == "array"' <<<"$rules" >/dev/null
 
-          missing_types=()
+          # Every problem is collected before failing, so one run reports all of them.
+          problems=()
+
           for t in deletion non_fast_forward pull_request required_status_checks; do
             if ! jq -e --arg t "$t" 'any(.[]; .type == $t)' <<<"$rules" >/dev/null; then
-              missing_types+=("$t")
+              problems+=("Missing rule type: $t")
             fi
           done
 
@@ -53,17 +76,45 @@ jobs:
               missing_checks+=("$c")
             fi
           done
+          if [ ${#missing_checks[@]} -gt 0 ]; then
+            problems+=("Missing required checks: ${missing_checks[*]}")
+          fi
 
-          if [ ${#missing_types[@]} -gt 0 ] || [ ${#missing_checks[@]} -gt 0 ]; then
-            echo "::error::Branch protection on 'main' has been weakened or removed."
-            if [ ${#missing_types[@]} -gt 0 ]; then
-              echo "::error::Missing rule types: ${missing_types[*]}"
-            fi
-            if [ ${#missing_checks[@]} -gt 0 ]; then
-              echo "::error::Missing required checks: ${missing_checks[*]}"
-            fi
-            echo "::error::See docs/hardening_roadmap.md and sprints/S0_governance_hardening/sprint_plan.md (T1/T3) — this ruleset is what makes every other CI check in this repo actually block a merge; restore it in Settings > Rules."
+          unpinned=$(jq -r '
+            [.[] | select(.type == "required_status_checks")
+                 | .parameters.required_status_checks[]
+                 | select(.integration_id != 15368) | .context] | join(" ")
+          ' <<<"$rules")
+          if [ -n "$unpinned" ]; then
+            problems+=("Required checks not pinned to GitHub Actions (integration_id 15368): $unpinned")
+          fi
+
+          if ! jq -e '
+            any(.[]; .type == "pull_request"
+                     and .parameters.require_code_owner_review == true
+                     and .parameters.dismiss_stale_reviews_on_push == true
+                     and .parameters.require_last_push_approval == true
+                     and (.parameters.required_approving_review_count // 0) >= 1)
+          ' <<<"$rules" >/dev/null; then
+            seen=$(jq -c '
+              [.[] | select(.type == "pull_request") | .parameters
+                   | {required_approving_review_count, require_code_owner_review,
+                      dismiss_stale_reviews_on_push, require_last_push_approval}]
+            ' <<<"$rules")
+            problems+=("No pull_request rule requires code-owner review, stale-review dismissal, last-push approval and >= 1 approval. pull_request rules seen: $seen")
+          fi
+
+          if jq -e 'any(.[]; .type == "update")' <<<"$rules" >/dev/null; then
+            problems+=("An update rule is present: with no bypass actor allowed, it blocks every merge to main.")
+          fi
+
+          if [ ${#problems[@]} -gt 0 ]; then
+            echo "::error::Branch protection on 'main' no longer matches the cutover's shape."
+            for p in "${problems[@]}"; do
+              echo "::error::$p"
+            done
+            echo "::error::See docs/hardening_roadmap.md and glunk-works/claude-workbench#406: the approval and checks rulesets are what make review and every other CI check in this repo actually block a merge. Restore them in Settings > Rules."
             exit 1
           fi
 
-          echo "OK: ruleset intact — 4 rule types, 8 required checks."
+          echo "OK: rulesets intact — 4 rule types, 8 required checks pinned to GitHub Actions, approval rule with code-owner review and last-push approval, no update rule."
