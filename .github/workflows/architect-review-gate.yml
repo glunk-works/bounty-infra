@@ -1,0 +1,132 @@
+name: architect-review-gate
+
+# The fresh-session review gate (WB-D24 item 7, WB-D37, #458). Posts the commit status named by
+# the default branch's `review.ci_gate.check` against the PR's head: `success` for a PR that
+# touches nothing under the gate's triggers, or whose head carries a fresh-session review by the
+# declared reviewer App; `failure` when that is not so. A config or API error posts nothing and fails the job. The config checks, the exemption and the review
+# match are copies of the gate-relevant parts of scripts/identity/wow-review (its config checks
+# through reviewer_app.id, `decide_exempt` and `decide_already`); change them together. The review
+# match reads the latest matching review's `Review verdict:` line (WB-D38, #905): it reads `success` only on a
+# `pass` line and posts `failure` for any other. It is still a copy of `decide_already`'s; tests/review-verdict.test.sh holds the two equal.
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+  pull_request_review:
+    types: [submitted]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    name: review gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      statuses: write
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      PR: ${{ github.event.pull_request.number }}
+      SHA: ${{ github.event.pull_request.head.sha }}
+      BASE: ${{ github.event.pull_request.base.ref }}
+      DEFAULT: ${{ github.event.repository.default_branch }}
+    steps:
+      - name: Decide and post the review status
+        run: |
+          set -eu
+          fail() { echo "gate: $1" >&2; exit 1; }
+          [ "$BASE" = "$DEFAULT" ] || { echo "base is not the default branch; nothing posted"; exit 0; }
+          case $PR in ''|0*|*[!0-9]*) fail "bad PR number" ;; esac
+          case $SHA in *[!0-9a-f]*|'') fail "bad head SHA" ;; esac
+          [ "${#SHA}" = 40 ] || fail "bad head SHA"
+
+          # Config: the default branch's copy (no ref), never the PR's.
+          DEF=$(mktemp)
+          gh api -H 'Accept: application/vnd.github.raw+json' "repos/$REPO/contents/.ai/project.yml" >"$DEF" \
+            || fail "cannot read the default branch's .ai/project.yml"
+          yq_s() { yq -r "$1" <"$DEF" | tr -d '\r'; }
+          [ "$(yq_s '.identities | tag')" = '!!map' ] || fail "identities is not a map"
+          [ "$(yq_s '.identities.reviewer_app | tag')" = '!!map' ] || fail "no reviewer_app"
+          [ "$(yq_s '.review.ci_gate | tag')" = '!!map' ] || fail "no review.ci_gate"
+          for k in header attestation check; do
+            [ "$(yq_s ".review.ci_gate.$k | tag")" = '!!str' ] || fail "review.ci_gate.$k is not a string"
+          done
+          HDR=$(yq -er '.review.ci_gate.header' <"$DEF") || fail "unreadable header"
+          ATT=$(yq -er '.review.ci_gate.attestation' <"$DEF") || fail "unreadable attestation"
+          CHECK=$(yq -er '.review.ci_gate.check' <"$DEF") || fail "unreadable check"
+          nl='
+          '
+          for v in "$HDR" "$ATT" "$CHECK"; do
+            case $v in ''|*"$nl"*) fail "a gate string is empty or multi-line" ;; esac
+          done
+          TRIG_EXPR='((.review.ci_gate.triggers_on | select(tag != "!!null")) // .code_paths)'
+          [ "$(yq_s "$TRIG_EXPR | tag")" = '!!seq' ] || fail "no trigger list"
+          [ "$(yq_s "$TRIG_EXPR | length")" -ge 1 ] 2>/dev/null || fail "an empty trigger list"
+          [ -z "$(yq_s "$TRIG_EXPR | .[] | select(tag != \"!!str\") | tag")" ] \
+            && [ -z "$(yq_s "$TRIG_EXPR | .[] | select(length == 0) | tag")" ] \
+            || fail "a trigger entry is not a non-empty string"
+          TRIGGERS=$(yq -o=json -I=0 "$TRIG_EXPR" <"$DEF") || fail "unreadable trigger list"
+          [ "$(yq_s '.identities.reviewer_app.id | tag')" = '!!int' ] || fail "reviewer_app.id is not an integer"
+          RID=$(yq_s '.identities.reviewer_app.id')
+          case $RID in ''|0*|*[!0-9]*) fail "reviewer_app.id is not a positive integer" ;; esac
+
+          # Exemption: no changed file (or rename source) under a trigger entry.
+          bad=$(printf '%s' "$TRIGGERS" | jq -r '[.[] | select(test("[*?\\[\\]{}!]") or startswith("/") or startswith("./") or (split("/") | any(. == "..")))] | length')
+          [ "$bad" = 0 ] || fail "an unusable trigger entry"
+          ENC=$(printf '%s' "$DEFAULT" | jq -sRr @uri)
+          TIP=$(gh api "repos/$REPO/git/ref/heads/$ENC" --jq .object.sha) || fail "cannot resolve the default branch tip"
+          case $TIP in *[!0-9a-f]*|'') fail "the default branch tip is not a SHA" ;; esac
+          [ "${#TIP}" = 40 ] || fail "the default branch tip is not a SHA"
+          CMP=$(mktemp)
+          gh api "repos/$REPO/compare/$TIP...$SHA" >"$CMP" || fail "the compare failed"
+          EXEMPT=$(jq -r --argjson t "$TRIGGERS" '
+            if ((.status == "ahead" or .status == "diverged") and ((.ahead_by // 0) >= 1)
+                and ((.files | type) == "array") and (.files | length) >= 1 and (.files | length) < 300
+                and ([.files[] | select(.status == "renamed" and ((.previous_filename // "") == ""))] | length) == 0)
+            then ([.files[] | .filename, .previous_filename] | map(select(. != null))
+                  | any(.[]; . as $p | any($t[]; . as $e | $p | startswith($e)))) | if . then "match" else "clear" end
+            else "incomplete" end' <"$CMP") || EXEMPT=incomplete
+
+          STATE=failure
+          DESC="No fresh-session review on this head"
+          if [ "$EXEMPT" = clear ]; then
+            STATE=success
+            DESC="Exempt: no gated path changed"
+          elif [ "$EXEMPT" = match ]; then
+            REV=$(mktemp)
+            gh api --paginate "repos/$REPO/pulls/$PR/reviews" \
+              --jq '.[] | {uid: .user.id, commit_id: .commit_id, state: .state, submitted_at: .submitted_at, body: .body}' >"$REV" \
+              || fail "cannot read the PR's reviews"
+            VWORD=$(jq -r -s --argjson rid "$RID" --arg sha "$SHA" --arg h "$HDR" --arg a "$ATT" '
+                [.[] | select(.uid == $rid and .commit_id == $sha and .state == "COMMENTED" and .submitted_at != null
+                              and (((.body // "") | split("\n")) as $l | ($l[0] == $h and $l[2] == $a)))
+                     | {t: .submitted_at, v: (((.body // "") | split("\n"))[4] // "")}]
+                | if length == 0 then "none"
+                  else (to_entries | max_by([.value.t, .key]) | .value.v) as $v
+                       | if $v == "Review verdict: pass" then "success" else "blocking" end
+                  end
+                ' <"$REV") || fail "the review match failed"
+            case $VWORD in
+              success)
+                STATE=success
+                DESC="Fresh-session review posted on this head" ;;
+              blocking)
+                STATE=failure
+                DESC="Review on this head found blocking issues" ;;
+              none) ;;
+              *) fail "the review match printed an unexpected word" ;;
+            esac
+          else
+            DESC="Could not verify the changed files"
+          fi
+          echo "gate: $CHECK $STATE ($EXEMPT)"
+          gh api -X POST "repos/$REPO/statuses/$SHA" -f state="$STATE" -f context="$CHECK" -f description="$DESC" >/dev/null

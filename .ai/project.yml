@@ -65,22 +65,41 @@ gates:
     - { cwd: infra, run: "tofu init -backend=false && tofu validate" }
 
 # ── branch protection ────────────────────────────────────────────────────────
-# Read live from `gh api repos/glunk-works/bounty-infra/rules/branches/main` on 2026-07-22:
-# 4 rule types, 8 required contexts. `pr-title` runs on every PR but is deliberately NOT
-# required (title format is a convention, not a security or correctness gate) — so it must
-# not appear here, or /pr-checks would report a gate that does not gate.
+# Two repo rulesets on main since the cutover (claude-workbench#406): the checks ruleset and
+# the code-owner approval ruleset, neither with a bypass actor. Every required check is pinned
+# to GitHub Actions (integration_id 15368). `architect-review` is the commit status the review
+# gate posts; it is added to the live checks ruleset right after the PR that adds this list
+# merges. `pr-title` runs on every PR but is deliberately NOT required (title format is a
+# convention, not a security or correctness gate) — so it must not appear here, or /pr-checks
+# would report a gate that does not gate.
+rulesets:
+  - name: main-required-checks
+    source: repo
+    rule_types: [required_status_checks]
+    required_checks: [lint, test, tofu-validate, tofu-plan,
+                      dependency-audit, sbom, secrets-scan, zizmor, architect-review]
+  - name: protected-integration-branches
+    source: repo
+    rule_types: [deletion, non_fast_forward, pull_request]
+# Legacy single-ruleset form, kept in step with the checks entry above: most readers still use it.
 ruleset:
-  name: protected-integration-branches
-  rule_types: [deletion, non_fast_forward, pull_request, required_status_checks]
+  name: main-required-checks
+  rule_types: [required_status_checks]
   required_checks: [lint, test, tofu-validate, tofu-plan,
-                    dependency-audit, sbom, secrets-scan, zizmor]
+                    dependency-audit, sbom, secrets-scan, zizmor, architect-review]
 
 # ── the fresh-session review gate ────────────────────────────────────────────
-# null is a decision, not a gap: this repo has no review CI check. Its critic pass is
-# /critic-gate, run locally before the PR — which makes that pass the only critic look a
-# diff gets before the human's merge click.
+# .github/workflows/architect-review-gate.yml posts `check` as a commit status on every PR
+# into main: `success` when no path under code_paths changed, or when the head carries a
+# fresh-session review by identities.reviewer_app; `failure` otherwise. It reads this file
+# from main, never from the PR. header and attestation are frozen wire strings — paste, never
+# paraphrase.
 review:
-  ci_gate: null
+  ci_gate:
+    check: architect-review
+    header: "**Opus/Architect review (automated)**"
+    attestation: "*Fresh-session review: this session did not author the diff.*"
+    triggers_on: null   # null means code_paths; a PR touching nothing under code_paths is not gated.
 
 # ── agents ───────────────────────────────────────────────────────────────────
 # `models` governs *session* routing (which model a person should be running), not what a
@@ -97,4 +116,11 @@ models:
 orchestration: null              # null means the loop never dispatches into this repo.
 
 # ── declared identities ──────────────────────────────────────────────────────
-identities: null                 # null until the cutover's PR 1 replaces it with the map.
+# Trust is by numeric id, never by login. No dev_app.commit_route: main has no signature
+# rule, so App-mode pushes take the default git route.
+identities:
+  maintainer:
+    - { login: Seuss27, id: 22668449 }
+  dev_app: { login: "glunk-dev[bot]", id: 339840170 }
+  reviewer_app: { login: "glunk-review[bot]", id: 339841158 }
+  loop_app: { login: "glunk-loop[bot]", id: 338193635 }
