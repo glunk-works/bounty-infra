@@ -72,7 +72,7 @@ jobs:
           tofu_version: 1.13.0
 
       - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: ${{ secrets.AWS_OIDC_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
@@ -335,7 +335,7 @@ jobs:
           echo "SESSION_POLICY=${SESSION_POLICY}" >> "$GITHUB_ENV"
 
       - name: Assume scoped scanner-writer session (SE-MG2)
-        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: ${{ secrets.AWS_SCANNER_WRITER_ROLE_ARN }}
           role-chaining: true
