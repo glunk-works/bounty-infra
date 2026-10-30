@@ -71,7 +71,7 @@ jobs:
           pip install dist/*.whl
           python -c "import bounty_scanner.scanner; print('Build verified successfully')"
 
-  # T3(c): credential-free — `-backend=false` needs no AWS/Infisical access, so
+  # T3(c): credential-free — `-backend=false` needs no AWS access, so
   # this runs on every PR (including forks), unlike T2's `tofu-plan`, which
   # holds real (read-only) credentials.
   tofu-validate:

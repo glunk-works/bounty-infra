@@ -6,7 +6,7 @@ variable "aws_region" {
 variable "vultr_api_key" {
   type        = string
   sensitive   = true
-  description = "Vultr API key (Infisical-sourced) for apply. The PR-time plan passes a placeholder and runs -refresh=false (BI-D23)."
+  description = "Vultr API key (read from SSM) for apply. The PR-time plan passes a placeholder and runs -refresh=false (BI-D23)."
 }
 
 variable "vultr_region" {

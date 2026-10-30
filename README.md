@@ -60,27 +60,35 @@ bounty-infra/
 
 Because this infrastructure is stateless, you do not need to run local initializations. Everything is handled via the GitHub Actions UI.
 
-### Prerequisites (Infisical)
+### Prerequisites
 
-Ensure the following variables are populated in your Infisical `bounty-infra` path:
+**GitHub Environment secrets** (Settings -> Environments). `run-scan.yml`'s `execute-scan` job runs on the `scan` Environment (required reviewer, `main` only); `deploy-infra.yml`'s `apply` job runs on `production`. Each holds its own copy of the values it uses:
 
-* `AWS_OIDC_ROLE_ARN`: The OIDC deployment role from global-bootstrap.
+* `AWS_OIDC_ROLE_ARN` (both): The OIDC deployment role from global-bootstrap.
 
-* `AWS_SCANNER_WRITER_ROLE_ARN`: The `bounty-scanner-s3-writer` role (global-bootstrap) `run-scan.yml` assumes-into for a short-lived, per-scan-scoped S3-write session (SE-MG2).
+* `TF_STATE_BUCKET` (both): The central Terraform state bucket from global-bootstrap.
 
-* `AWS_REGION`: e.g., us-east-1
+* `TF_STATE_LOCK_TABLE` (both): The central DynamoDB lock table.
 
-* `TF_STATE_BUCKET`: The central Terraform state bucket from global-bootstrap.
+* `AWS_SCANNER_WRITER_ROLE_ARN` (`scan`): The `bounty-scanner-s3-writer` role (global-bootstrap) `run-scan.yml` assumes-into for a short-lived, per-scan-scoped S3-write session (SE-MG2).
 
-* `TF_STATE_LOCK_TABLE`: The central DynamoDB lock table.
+* `FINDINGS_BUCKET_NAME` (`scan`): The S3 bucket where JSON reports will be saved.
 
-* `FINDINGS_BUCKET_NAME`: The S3 bucket where JSON reports will be saved.
+* `KMS_KEY_ARN` (`scan`): The KMS key (global-bootstrap) encrypting the findings bucket.
 
-* `KMS_KEY_ARN`: The KMS key (global-bootstrap) encrypting the findings bucket.
+* `OPERATOR_IP` (`scan`): The operator's address as a CIDR (`x.x.x.x/32`), used only by an `enable_ssh_debug` dispatch. It changes with the operator's address; update it with `gh secret set OPERATOR_IP --env scan -R glunk-works/bounty-infra`.
 
-* `VULTR_API_KEY`: Used both by the `vultr` OpenTofu provider and by `run-scan.yml` to create/poll/destroy the per-scan VM directly.
+**Environment variable** (both Environments): `AWS_REGION`, e.g. us-east-1.
 
-* `GEMINI_API_KEY`: Required for the `scanner.py` LLM triage loop.
+**`infra-plan` Environment** (used by the PR-time plan in `plan-infra.yml`): secrets `AWS_PLAN_ROLE_ARN` and `TF_STATE_BUCKET`; variable `AWS_REGION`.
+
+**SSM Parameter Store** (SecureString, AWS-managed `aws/ssm` key, readable only by the apply role):
+
+* `/bounty-infra/vultr_api_key`: Used both by the `vultr` OpenTofu provider and by `run-scan.yml` to create/poll/destroy the per-scan VM directly.
+
+* `/bounty-infra/operator_ssh_key`: The public key injected into the scan VM on an `enable_ssh_debug` dispatch.
+
+Both parameters are written by global-bootstrap's apply; to rotate one, change its value there and bump its `value_wo_version`.
 
 ### Running a Scan
 
@@ -100,7 +108,7 @@ Our pipeline is decoupled to ensure infrastructure health is separated from secu
 
 1. Select the **2. Execute Vulnerability Scan** workflow.
 
-2. Click **Run workflow**.
+2. Click **Run workflow**, dispatching from `main` (the `scan` Environment admits only `main`). The `execute-scan` job then waits for a reviewer to approve the `scan` deployment before it runs.
 
 3. A customizable form will appear allowing you to inject CLI flags (Target Domain, RoE Program, Image Tag, Target Severities, Timeout, and Max Findings).
 

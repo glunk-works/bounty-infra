@@ -17,8 +17,8 @@ s3://<findings-bucket>/roe/<program-handle>/scope.json
 
 `<program-handle>` must match `^[A-Za-z0-9][A-Za-z0-9_-]*$` (`roe.py`'s
 `_PROGRAM_HANDLE_RE`) — it participates directly in the S3 key. `<findings-bucket>` is
-account-specific and resolves at runtime via Infisical / the `S3_BUCKET_NAME` env var the
-task definition already carries; it is deliberately not written down here (BI-D4).
+account-specific; the scan VM receives it as `S3_BUCKET_NAME` from its user-data
+(`infra/scan-vm-userdata.sh.tftpl`). It is deliberately not written down here (BI-D4).
 
 ## Document shape
 
@@ -75,9 +75,8 @@ aws s3 cp scope.json "s3://<findings-bucket>/roe/<program-handle>/scope.json" \
   --sse aws:kms --sse-kms-key-id "<kms-key-arn>"
 ```
 
-Resolve `<findings-bucket>` and `<kms-key-arn>` the same way any other account-specific
-value in this system resolves — Infisical, or a `tofu output` in `global-bootstrap` (which
-owns both). The task role already holds `s3:PutObject`/`s3:GetObject`/`s3:ListBucket` on
+Resolve `<findings-bucket>` and `<kms-key-arn>` with `tofu output` in `global-bootstrap` (which
+owns both; Environment secrets cannot be read back). The task role already holds `s3:PutObject`/`s3:GetObject`/`s3:ListBucket` on
 the findings bucket and `kms:Encrypt`/`kms:Decrypt`/`kms:GenerateDataKey*` on that key
 (`infra/main.tf`) — nothing here changes IAM.
 
