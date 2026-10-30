@@ -16,15 +16,17 @@ safely merge security fixes through the very ungated path (#8/#9) that is itself
 **This repository is intentionally public** (portfolio project). Nothing below is a reason to
 make it private; it is the set of invariants that make "public" safe. Verified 2026-07-21:
 `.tf`/`.yml`/`.py`/`.toml`/`.md` contain **no** account IDs, ARNs, bucket names, or identity
-IDs — every account-specific value resolves at runtime through Infisical (`env.TF_STATE_BUCKET`,
-`env.AWS_OIDC_ROLE_ARN`, `vars.IDENTITY_ID`) or tofu variables. The only committed literal is
+IDs — every account-specific value resolves at runtime through ~~Infisical (`env.TF_STATE_BUCKET`,
+`env.AWS_OIDC_ROLE_ARN`, `vars.IDENTITY_ID`)~~ — **SUPERSEDED by BI-D24 (2026-10-30)**: GitHub
+Environment secrets (`secrets.TF_STATE_BUCKET`, `secrets.AWS_OIDC_ROLE_ARN`) and SSM Parameter
+Store (updated 2026-10-30; not part of the 2026-07-21 verification) — or tofu variables. The only committed literal is
 the image name `glunk-works/bounty-scanner` (GHCR since SE; previously ECR), which is inert.
 
 **Where each class of sensitive material lives:**
 
 | Class | Home | Never |
 |---|---|---|
-| Genuine secrets, account-specific values | Infisical (`/bounty-infra`, `prod`) | Committed, or echoed to a workflow log |
+| Genuine secrets, account-specific values | ~~Infisical (`/bounty-infra`, `prod`)~~ **SUPERSEDED by BI-D24 (2026-10-30)**: secrets in SSM Parameter Store under `/bounty-infra/`; account-specific values in GitHub Environment secrets | Committed, or echoed to a workflow log |
 | RoE / scope allowlist (S1, #7) | **S3 under the existing KMS key**, fetched by the scanner at startup; Infisical holds only the `s3://…` **pointer** (BI-D8, 2026-07-22 — supersedes "Infisical, runtime config") | A committed `scope.yaml`. It enumerates which bounty programs the operator is engaged with — the most sensitive artifact the system will hold. Also never a workflow log, artifact, or the ECS `containerOverrides` JSON — under BI-D8 the rules never transit CI at all. Test fixtures use invented rules (`^example\.com$`), never real program scope |
 | Scan findings, triage reports, resolved hosts/subdomains | S3 only | A workflow log, artifact, or PR comment. This is third-party vulnerability data |
 | Pre-remediation vulnerability detail | Draft security advisories (below) | A public issue body, until the fix has landed |
@@ -218,7 +220,7 @@ STS session-policy reality instead of the retired always-on task role.)*
   (Rejected: shared source living in loop-orchestrator's own repo — a dedicated central home
   is cleaner long-term.)
 - **BI-D4 (2026-07-21) — public-repo posture** (§ *Public-repo posture* above): the repo stays
-  **public**; secrets and the RoE allowlist live in **Infisical**, findings in **S3**,
+  **public**; secrets and the RoE allowlist live in ~~**Infisical**~~ **(secrets and account-specific values: SUPERSEDED by BI-D24, 2026-10-30)**, findings in **S3**,
   pre-remediation vuln detail in **draft advisories** published post-fix; `tofu plan` output is
   summarized only. (Rejected: making the repo private — it is deliberate portfolio material;
   a **private mirror repo** for the sensitive elements — every candidate has a better home than
@@ -464,7 +466,9 @@ explicit, with the owner's confirmation, when these entries were written (#100).
   subject-precedence trap in `CLAUDE.md` is avoided by construction. Approver identity comes
   from GitHub's deployment record and is written to the ledger. Slack carries request, approval
   link, status and summary (#107); the Socket Mode app makes Slack the approval surface in S6
-  (#144). (Rejected: **Slack reaction approvals polled by a scheduled Actions job** — the
+  (#144). *(Amended by BI-D24, 2026-10-30: the gate sits on the credentialed `execute-scan` job via
+  the `scan` Environment, so that job's OIDC subject is `environment:scan` by design.)*
+  (Rejected: **Slack reaction approvals polled by a scheduled Actions job** — the
   original draft. Anyone in the channel can react, so it needs an approver allowlist; the
   approval does not bind to one request and target, so it can be swapped onto a different scan;
   and a scheduled poller runs at five-minute granularity with no delivery guarantee.)
@@ -521,7 +525,8 @@ Decided for #179, the CI-credentials precondition of the way-of-working cutover
 runs in CI before any human approves it.
 
 - **BI-D22 (2026-10-27) — the apply role's `main`-ref trust is an accepted gap, under three
-  conditions.** `github-actions-bounty-infra` is the apply role (`deploy-infra.yml`,
+  conditions.** *(Amended by BI-D24, 2026-10-30: no job in this repo presents the
+  `ref:refs/heads/main` subject any more; the premise about `run-scan.yml` below no longer holds.)* `github-actions-bounty-infra` is the apply role (`deploy-infra.yml`,
   `environment: production`), but it also trusts `repo:glunk-works/bounty-infra:ref:refs/heads/main`,
   because `run-scan.yml` assumes it. That workflow runs on `workflow_dispatch` with free inputs,
   and its scan job stays on the branch subject even after #106 (BI-D16 puts the `scan-approval`
@@ -601,6 +606,7 @@ runs in CI before any human approves it.
       to read Infisical `prod` `/bounty-infra`, the Vultr key included. It is deleted in
       Infisical, and the repo variable with it. Deleting only the variable does nothing: its
       value is not secret and is printed in past public plan logs.
+      *(Done by 2026-10-30: the `:pull_request` plan-role subject and the Infisical plan identity are retired.)*
 
     Those removals are the control, not the workflow file. A `pull_request` run uses the PR's
     own copy of the workflow, so anyone able to edit a workflow could drop the `environment:`
@@ -646,6 +652,34 @@ runs in CI before any human approves it.
   here** — an approved PR's code could copy out a Vultr key that controls the whole account, and
   it would tie this gate to the Infisical-to-SSM migration (#168). **A read-only Vultr
   credential** — not verified to exist for firewall groups and reserved IPs.)
+
+- **BI-D24 (2026-10-30) — secrets live in SSM, configuration in Environment secrets, and
+  `execute-scan` runs behind the `scan` Environment.** Supersedes the BI-D4 rule that put
+  genuine secrets and account-specific values in Infisical; part of #168.
+  - **Secrets.** `/bounty-infra/vultr_api_key` and `/bounty-infra/operator_ssh_key` are SSM
+    SecureStrings under the AWS-managed `aws/ssm` key. Only the apply role
+    (`github-actions-bounty-infra`) may read them; the plan role has no SSM grant. They are
+    written by global-bootstrap's apply (bump `value_wo_version` to rotate). Each workflow
+    fetches a value with `aws ssm get-parameter --with-decryption`, rejects an empty value or
+    any non-printable byte, then `::add-mask::`s it before writing it to `$GITHUB_ENV`.
+  - **Configuration.** Role ARNs, state bucket and lock table, findings bucket and KMS key ARN
+    are Environment *secrets*, not variables: a variable prints unmasked in logs, and BI-D4
+    keeps account-specific values out of logs. `AWS_REGION` is the one variable. The
+    `production` Environment serves `apply`; the `scan` Environment serves `execute-scan`.
+  - **`OPERATOR_IP`** is a `scan` Environment secret rather than an SSM value because it
+    changes with the operator's address; set it with
+    `gh secret set OPERATOR_IP --env scan -R glunk-works/bounty-infra`.
+  - **`execute-scan` behind `scan`.** The Environment requires a reviewer and admits only
+    `main`, so the job's OIDC subject is `environment:scan`.
+  - **Amends BI-D16 and BI-D22.** BI-D16's reviewer gate now sits on the credentialed
+    `execute-scan` job rather than a credential-less `approve` job, so that job's subject
+    changes to `environment:scan` by design (the premise of #106). No job in this repo
+    presents the `ref:refs/heads/main` subject any more (the premise of #182 and BI-D22's
+    reasoning about `run-scan.yml`).
+  - **Cleanup.** The Infisical values, the machine identity and `vars.IDENTITY_ID` are
+    deleted after the first green apply and scan on this path.
+  - (Rejected: *a customer-managed KMS key for the parameters* — the AWS-managed key plus the
+    apply role's path-scoped read grant meets the need without a key policy to maintain.)
 
 ## Known-gap register
 

@@ -22,15 +22,16 @@ per-domain-scoped S3-write session (SE-MG2; the writer role and its trust policy
 `global-bootstrap`, not here). OpenTofu in `infra/` now owns only the Vultr firewall group
 and an optional, off-by-default reserved IP (SE-MG5) — the AWS VPC/ECS/ECR half is fully
 retired. Zero ingress on the scan VM; every account-specific value resolves at runtime
-through Infisical (`env.AWS_OIDC_ROLE_ARN`, `env.TF_STATE_BUCKET`, `vars.IDENTITY_ID`,
-`VULTR_API_KEY`), tofu variables, or — for the PR-time plan only — the `infra-plan`
-Environment (BI-D23).
+through GitHub Environment secrets (`production` for apply, `scan` for `execute-scan`;
+`secrets.AWS_OIDC_ROLE_ARN`, `secrets.TF_STATE_BUCKET`), SSM Parameter Store
+(`/bounty-infra/vultr_api_key`, BI-D24), tofu variables, or — for the PR-time plan only — the
+`infra-plan` Environment (BI-D23).
 
 > **This repo is under active hardening — read the roadmap before extending it.**
 > [`docs/hardening_roadmap.md`](docs/hardening_roadmap.md) is the reference of record:
 > the sprint sequence (S0 governance → S1 scanner security → S3–S7, which are GitHub
 > milestones, plus **SG** CI gates and **SE** egress migration; S2 was dissolved into S3/SG),
-> and the locked decisions (**BI-D1..BI-D23**).
+> and the locked decisions (**BI-D1..BI-D24**).
 >
 > **The compute-model migration (BI-D5) is DONE as of SE Phase 2:** scan egress runs on
 > per-scan ephemeral Vultr VMs; AWS is control-plane only. Any new AWS compute/networking
@@ -57,9 +58,8 @@ the same name. Both rules, and why, are in the plugin's `reference/project-schem
   `tofu plan` on PRs touching `infra/**`, apply on merge-to-main behind the protected
   `production` Environment. `-auto-approve` is allowed *only* post-approval.
 - **A PR's plan gets no credential before a human approves it** (BI-D23): the credentialed
-  plan job sits on the `infra-plan` Environment, and once the old `:pull_request`-bound
-  identities are retired (the plan role's subject and the Infisical plan identity), the
-  Environment's subject is the only way in. The plan holds no secret value either: it runs
+  plan job sits on the `infra-plan` Environment, and the old `:pull_request`-bound plan-role
+  subject is retired, so the Environment's subject is the only way in. The plan holds no secret value either: it runs
   `-refresh=false` with a placeholder Vultr key, so never give it the real key or a
   SecureString read.
 - **`tofu plan` output is summarized, never dumped** (BI-D4). Plan renders the account ID,
@@ -82,11 +82,9 @@ the same name. Both rules, and why, are in the plugin's `reference/project-schem
 - **A job's OIDC subject is derived from its trigger and its `environment:`, in that
   precedence: Environment > `pull_request` > branch ref.** Adding `environment: X` to a job
   makes it present `repo:<org>/<repo>:environment:X` *instead of* the branch subject, which
-  breaks auth at both hops until each is updated. Treat a trigger/environment change as a
+  breaks auth until the AWS trust lists the new subject. Treat a trigger/environment change as a
   change to the job's identity. Where the verifier takes a list (the AWS trust condition)
-  **append** the new subject — never replace, since sibling workflows share the role. Where
-  it takes a single value (Infisical's Subject) **bind on the `repository` + `ref` claims
-  instead**: they are invariant to the environment. Never widen with a `repo:…:*` glob —
+  **append** the new subject — never replace, since sibling workflows share the role. Never widen with a `repo:…:*` glob —
   in OIDC auth `*` matches `:` too, so it also admits `:pull_request`.
 - Pin third-party actions to a **commit SHA**, not a floating tag — a mutable tag on an
   action that receives OIDC claims is a credential-handoff to whoever moves the tag.
@@ -111,7 +109,7 @@ the same name. Both rules, and why, are in the plugin's `reference/project-schem
 
 ## Local: what must not be committed
 
-Genuine secrets and account-specific values → **Infisical** (`/bounty-infra`, `prod`).
+Genuine secrets → **SSM Parameter Store** (`/bounty-infra/`); account-specific values → **GitHub Environment secrets** (BI-D24).
 The RoE / scope rules → **S3, one object per engagement** (`s3://<findings-bucket>/roe/<program>/scope.json`,
 BI-D8/BI-D9), never this repo — a committed scope file would enumerate which bounty programs
 the operator is engaged with, the most sensitive artifact this system holds. Scan findings,
@@ -130,7 +128,7 @@ hatch run lint:fmt        # (from ./src) ruff format + ruff check --fix
 hatch build               # (from ./src) wheel
 ```
 
-A real `tofu apply` additionally needs Infisical-sourced backend config
+A real `tofu apply` additionally needs backend config from the Environment's secrets and its `AWS_REGION` variable
 (`-backend-config="bucket=…"`, `region`, `dynamodb_table`) and the assumed OIDC role — it
 does not run cleanly from a laptop by design. The PR-time plan takes `bucket` and `region`
 from the `infra-plan` Environment instead, and no lock table (BI-D23).
@@ -140,7 +138,7 @@ from the `infra-plan` Environment instead, and no lock table (BI-D23).
 - **`.ai/next-steps.md`** — the live cursor: current sprint/task, next action, which model.
   Read this first.
 - **`.ai/project.yml`** — this repo's parameterization of the working method.
-- **`docs/hardening_roadmap.md`** — reference of record: posture, BI-D1..D23, sprint
+- **`docs/hardening_roadmap.md`** — reference of record: posture, BI-D1..D24, sprint
   sequence, the known-gap register, public-repo rules, cross-repo coupling. Also serves as the
   threat model.
 - **`sprints/*/sprint_plan.md`** — the per-sprint plans (S0, S1, SC, SW).

@@ -41,21 +41,39 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Fetch Pipeline Secrets from Infisical
-        uses: Infisical/secrets-action@77ab1f4ccd183a543cb5b42435fbd181189f4995 # v1.0.16
-        with:
-          method: "oidc"
-          identity-id: ${{ vars.IDENTITY_ID }}
-          oidc-audience: ${{ github.server_url }}/${{ github.repository }}
-          env-slug: "prod"
-          project-slug: "pipeline-secret-store"
-          secret-path: "/bounty-infra"
-
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
         with:
-          role-to-assume: ${{ env.AWS_OIDC_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ secrets.AWS_OIDC_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          mask-aws-account-id: true
+
+      - name: Fetch Vultr API key from SSM
+        run: |
+          set -euo pipefail
+          export LC_ALL=C
+          value="$(aws ssm get-parameter \
+            --name /bounty-infra/vultr_api_key \
+            --with-decryption \
+            --query 'Parameter.Value' \
+            --output text)"
+
+          # Reject an empty value and any non-printable byte before the value
+          # reaches ::add-mask:: or $GITHUB_ENV: a multi-line value would
+          # defeat the mask and inject extra KEY=value lines via $GITHUB_ENV.
+          case "$value" in
+            "")
+              echo "::error::SSM parameter vultr_api_key is empty -- refusing to export it." >&2
+              exit 1
+              ;;
+            *[![:print:]]*)
+              echo "::error::SSM parameter vultr_api_key contains a non-printable byte -- refusing to export it." >&2
+              exit 1
+              ;;
+          esac
+
+          echo "::add-mask::$value"
+          echo "VULTR_API_KEY=$value" >> "$GITHUB_ENV"
 
       - name: Setup OpenTofu Core
         uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
@@ -64,6 +82,10 @@ jobs:
 
       - name: OpenTofu apply
         working-directory: ./infra
+        env:
+          TF_STATE_BUCKET: ${{ secrets.TF_STATE_BUCKET }}
+          TF_STATE_LOCK_TABLE: ${{ secrets.TF_STATE_LOCK_TABLE }}
+          AWS_REGION: ${{ vars.AWS_REGION }}
         run: |
           set -euo pipefail
 

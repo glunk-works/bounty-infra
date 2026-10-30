@@ -17,18 +17,14 @@ name: "1a. Plan Infrastructure"
 #   - `tofu-plan` always runs, even on cancellation, and reports the outcome.
 #     Its job id IS the required-check context.
 # The plan role (`github-actions-bounty-infra-plan`, global-bootstrap) trusts
-# the `environment:infra-plan` subject. Once this workflow is on `main`, the two
-# `:pull_request`-bound identities left from the old plan path are retired
-# together: that subject on the plan role (a global-bootstrap change) and the
-# Infisical plan identity (`vars.PLAN_IDENTITY_ID`, which could read the Vultr
-# key). Those removals are the real control, not this file: a `pull_request`
-# run uses the PR's own copy of the workflow, so anyone able to edit a workflow
-# could drop the `environment:` line. Until then, BI-D22 conditions 2 and 3
-# bound who that is.
+# the `environment:infra-plan` subject. The old `:pull_request`-bound subject on the
+# plan role (a global-bootstrap change) was retired once this workflow reached
+# `main`. That removal is the real control, not this file: a `pull_request`
+# run uses the PR's own copy of the workflow, so the Environment subject on
+# the plan role is what admits it.
 #
 # NO SECRET VALUES IN THE PLAN (BI-D23). The plan runs `-refresh=false` with a
-# placeholder Vultr key, so it holds no Vultr credential and no Infisical
-# identity. It compares config to state; it does not show drift, and nothing
+# placeholder Vultr key, so it holds no Vultr credential. It compares config to state; it does not show drift, and nothing
 # else shows it before it is applied: `deploy-infra.yml` applies with refresh
 # and -auto-approve after its approval, so a drift correction lands unseen
 # (accepted in BI-D23). If a Vultr data source is ever added to infra/, the plan
