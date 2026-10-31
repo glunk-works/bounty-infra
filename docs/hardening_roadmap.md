@@ -619,6 +619,17 @@ runs in CI before any human approves it.
     `environment:infra-plan` subject, so nothing but the plan role may ever trust that
     subject. Read the PR's `infra/`, provider and `.github/workflows/` changes before
     approving the `infra-plan` deployment.
+  - **Dependabot workflow bumps** (2026-10-30, #187). A Dependabot-triggered run gets no
+    Actions or Environment secrets, so its approved `credentialed-plan` has no role ARN and
+    fails at *Configure AWS Credentials* before any AWS call (run 41117468468). GitHub documents
+    that a re-run keeps those restrictions. When a Dependabot PR trips `detect`, a maintainer
+    checks each new action pin against its upstream tag, then pushes an empty commit onto the
+    Dependabot branch. The new run is the maintainer's, so it gets the Environment's inputs
+    after approval. Being the last pusher, that maintainer cannot approve the merge, so the
+    other code owner does. `scripts/dependabot-infra.ps1 -Pr <N>`, run on the host, does all of
+    this. It refuses any change other than a pin moving to its own action's upstream tag commit,
+    or a provider version moving under the same operator. It asks before each push, approval
+    and merge.
   - **The inputs.** The plan job reads the `infra-plan` Environment's secrets (role ARN, state
     bucket) and a region variable, released only after approval. There is no lock table: the
     plan runs `-lock=false`, the plan role holds no DynamoDB grant, and `tofu init` omits
